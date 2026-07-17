@@ -1,0 +1,88 @@
+{
+  "name": "author-hq-rebuild",
+  "version": "0.1.0",
+  "description": "Local-first desktop app for author business tracking.",
+  "author": "Author HQ",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "electron:dev": "electron .",
+    "start": "node src/server.js",
+    "check": "node src/scripts/checkCode.js",
+    "test": "node --test",
+    "smoke:db": "set ELECTRON_RUN_AS_NODE=1&& electron src/scripts/smokeDatabase.js",
+    "smoke:app": "set ELECTRON_RUN_AS_NODE=1&& electron src/scripts/smokeApp.js",
+    "export:books": "node src/scripts/exportPublicBooks.js",
+    "postinstall": "electron-builder install-app-deps",
+    "package:win": "electron-builder --win --x64",
+    "package:dir": "electron-builder --dir"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.39.3",
+    "express": "^4.21.2",
+    "googleapis": "^173.0.0",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.8.0",
+    "multer": "^2.0.2",
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.30.4",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.authorhq.desktop",
+    "productName": "Author HQ",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "assets/**/*",
+      "build/**/*",
+      "package.json",
+      ".env.example"
+    ],
+    "extraResources": [
+      {
+        "from": "data",
+        "to": "data",
+        "filter": [
+          "**/*",
+          "!*.sqlite",
+          "!*.sqlite-*",
+          "!local-settings.json"
+        ]
+      }
+    ],
+    "afterPack": "./build/stamp-windows-icon.cjs",
+    "win": {
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "signtoolOptions": {
+        "sign": "./build/skip-win-signing.cjs"
+      },
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

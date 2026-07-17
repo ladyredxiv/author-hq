@@ -1,0 +1,12 @@
+node_modules/
+.env
+*.log
+.DS_Store
+coverage/
+data/*.sqlite
+data/*.sqlite-*
+data/backups/
+data/local-settings.json
+data/exports/
+dist/
+release/
