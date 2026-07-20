@@ -24,6 +24,7 @@ try {
   if (newsletterSave.status !== 302) throw new Error(`Newsletter workspace save returned ${newsletterSave.status}.`);
   const newsletterLocation = newsletterSave.headers.get('location');
   if (!newsletterLocation) throw new Error('Newsletter workspace did not return a location.');
+  await expectPage(handle.url, '/newsletter', `<a href="${newsletterLocation}"><strong>Smoke Newsletter Room</strong></a>`);
   await expectPage(handle.url, newsletterLocation, 'Smoke Newsletter Room');
   await expectPage(handle.url, newsletterLocation, 'Claude is thinking...');
   const newsletterDraftSave = await fetch(`${handle.url}${newsletterLocation}/draft`, { method: 'POST', redirect: 'manual' });

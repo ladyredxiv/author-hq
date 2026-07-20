@@ -4914,13 +4914,15 @@ function newsletterProjectForm() {
 
 function newsletterProjectTable(rows) {
   if (!rows.length) return '<p class="muted">No newsletter conversations yet.</p>';
-  return table(['Workspace', 'Pen', 'Draft', 'Updated', ''], rows.map((row) => [
-    `<a href="/newsletter/projects/${escapeHtml(row.id)}"><strong>${escapeHtml(row.title)}</strong></a><br><span class="tiny">${escapeHtml(row.topic || '')}</span>`,
-    row.pen_name,
-    row.draft_text || row.draft_html ? '<span class="pill">Shaped</span>' : '<span class="tiny">Planning</span>',
-    formatDateTime(row.updated_at),
-    `<form method="post" action="/newsletter/projects/${escapeHtml(row.id)}/delete" onsubmit="return confirm('Delete this newsletter workspace and its conversation?');"><button class="danger">Delete</button></form>`
-  ]));
+  return `<table><thead><tr><th>Workspace</th><th>Pen</th><th>Draft</th><th>Updated</th><th></th></tr></thead><tbody>
+    ${rows.map((row) => `<tr>
+      <td><a href="/newsletter/projects/${escapeHtml(row.id)}"><strong>${escapeHtml(row.title)}</strong></a><br><span class="tiny">${escapeHtml(row.topic || '')}</span></td>
+      <td>${escapeHtml(row.pen_name || '')}</td>
+      <td>${row.draft_text || row.draft_html ? '<span class="pill">Shaped</span>' : '<span class="tiny">Planning</span>'}</td>
+      <td>${escapeHtml(formatDateTime(row.updated_at))}</td>
+      <td><form method="post" action="/newsletter/projects/${escapeHtml(row.id)}/delete" onsubmit="return confirm('Delete this newsletter workspace and its conversation?');"><button class="danger">Delete</button></form></td>
+    </tr>`).join('')}
+  </tbody></table>`;
 }
 
 function newsletterWorkspaceView(project, messages) {
