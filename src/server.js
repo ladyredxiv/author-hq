@@ -424,11 +424,24 @@ app.get('/books', (req, res) => {
   const rows = sqlite.prepare(`
     SELECT b.*, p.display_name AS pen_name FROM books b
     LEFT JOIN pen_names p ON p.id = b.pen_name_id
-    ORDER BY COALESCE(b.planned_release, b.actual_release, b.updated_at) DESC
   `).all();
+  const filters = normalizeBookCatalogFilters(req.query);
+  const catalog = filterAndSortBooks(rows, filters);
+  const counts = {
+    active: rows.filter((row) => !isPublishedBook(row)).length,
+    published: rows.filter(isPublishedBook).length,
+    all: rows.length
+  };
   res.send(layout('Books', `
-    <section class="card"><h2>Add Book</h2>${bookForm()}</section>
-    <section><h2>Books</h2>${booksTable(rows)}</section>
+    <details class="card book-add-panel" id="add-book" ${String(req.query.add || '') === '1' ? 'open' : ''}>
+      <summary><span>Add a new book</span><span class="tiny">Open form</span></summary>
+      <div class="book-add-body">${bookForm()}</div>
+    </details>
+    <section class="book-catalog">
+      <div class="section-title-row"><div><h2>Book Catalog</h2><p class="muted">Keep current projects separate from the published backlist.</p></div><span class="pill">${catalog.length} shown</span></div>
+      ${bookCatalogControls(rows, filters, counts)}
+      ${booksTable(catalog)}
+    </section>
   `, { active: 'books' }));
 });
 
@@ -3861,18 +3874,16 @@ function table(headers, rows) {
 }
 
 function booksTable(rows) {
-  if (!rows.length) return '<p class="muted">No books yet.</p>';
-  return `<table><thead><tr><th>Title</th><th>Series</th><th>Pen</th><th>Words</th><th>Status</th><th>Planned</th><th>Actual</th><th>Notes</th><th>Actions</th></tr></thead><tbody>
+  if (!rows.length) return '<div class="catalog-empty"><strong>No books match this view.</strong><span>Try another shelf or clear one of the filters.</span></div>';
+  return `<div class="book-table-wrap"><table class="book-catalog-table"><thead><tr><th>Book</th><th>Pen</th><th>Status</th><th>Words</th><th>Release</th><th>Notes</th><th>Actions</th></tr></thead><tbody>
     ${rows.map((row) => `<tr>
-      <td>${escapeHtml(row.title)}</td>
-      <td>${escapeHtml(row.series || '')}</td>
+      <td class="book-title-cell"><strong>${escapeHtml(row.title)}</strong>${row.series ? `<span>${escapeHtml(row.series)}${row.series_position ? ` #${escapeHtml(row.series_position)}` : ''}</span>` : '<span>Standalone</span>'}</td>
       <td>${escapeHtml(row.pen_name || '')}</td>
+      <td><span class="pill">${escapeHtml(row.status || '')}</span></td>
       <td>${Number(row.word_count || 0).toLocaleString()}</td>
-      <td>${escapeHtml(row.status || '')}</td>
-      <td>${escapeHtml(row.planned_release || '')}</td>
-      <td>${escapeHtml(row.actual_release || '')}</td>
-      <td>${escapeHtml(row.notes || '')}</td>
-      <td>
+      <td>${bookReleaseCell(row)}</td>
+      <td class="book-notes-cell">${escapeHtml(row.notes || '')}</td>
+      <td class="book-actions-cell">
         <div class="action-row">
           <a class="button secondary" href="/books/${escapeHtml(row.id)}/edit">Edit</a>
           <a class="button secondary" href="/kdp-listings?bookId=${escapeHtml(row.id)}">KDP Packet</a>
@@ -3882,7 +3893,104 @@ function booksTable(rows) {
         </div>
       </td>
     </tr>`).join('')}
-  </tbody></table>`;
+  </tbody></table></div>`;
+}
+
+function normalizeBookCatalogFilters(query = {}) {
+  const view = ['active', 'published', 'all'].includes(String(query.view || '').toLowerCase())
+    ? String(query.view).toLowerCase()
+    : 'active';
+  const sort = ['release', 'title', 'series', 'updated'].includes(String(query.sort || '').toLowerCase())
+    ? String(query.sort).toLowerCase()
+    : 'release';
+  return {
+    view,
+    sort,
+    q: String(query.q || '').trim(),
+    pen: String(query.pen || '').trim(),
+    series: String(query.series || '').trim(),
+    status: String(query.status || '').trim()
+  };
+}
+
+function isPublishedBook(book) {
+  return ['published', 'published live', 'live'].includes(String(book.status || '').trim().toLowerCase());
+}
+
+function filterAndSortBooks(rows, filters) {
+  const query = filters.q.toLowerCase();
+  const filtered = rows.filter((row) => {
+    if (filters.view === 'active' && isPublishedBook(row)) return false;
+    if (filters.view === 'published' && !isPublishedBook(row)) return false;
+    if (filters.pen && String(row.pen_name_id || '') !== filters.pen) return false;
+    if (filters.series && String(row.series || '') !== filters.series) return false;
+    if (filters.status && String(row.status || '') !== filters.status) return false;
+    if (query) {
+      const haystack = [row.title, row.series, row.pen_name, row.status, row.notes].join(' ').toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
+  });
+
+  return filtered.sort((a, b) => {
+    if (filters.sort === 'title') return compareBookText(a.title, b.title);
+    if (filters.sort === 'series') {
+      return compareBookText(a.series || 'zzzz', b.series || 'zzzz')
+        || Number(a.series_position || 9999) - Number(b.series_position || 9999)
+        || compareBookText(a.title, b.title);
+    }
+    if (filters.sort === 'updated') return compareBookText(b.updated_at, a.updated_at) || compareBookText(a.title, b.title);
+    const aDate = isPublishedBook(a) ? (a.actual_release || a.planned_release) : (a.planned_release || a.actual_release);
+    const bDate = isPublishedBook(b) ? (b.actual_release || b.planned_release) : (b.planned_release || b.actual_release);
+    if (!aDate && bDate) return 1;
+    if (aDate && !bDate) return -1;
+    const dateOrder = compareBookText(aDate, bDate);
+    return (filters.view === 'published' ? -dateOrder : dateOrder) || compareBookText(a.title, b.title);
+  });
+}
+
+function compareBookText(a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base', numeric: true });
+}
+
+function bookCatalogControls(rows, filters, counts) {
+  const viewRows = rows.filter((row) => filters.view === 'all' || (filters.view === 'published' ? isPublishedBook(row) : !isPublishedBook(row)));
+  const pens = [...new Map(rows.filter((row) => row.pen_name_id && row.pen_name).map((row) => [String(row.pen_name_id), row.pen_name])).entries()]
+    .sort((a, b) => compareBookText(a[1], b[1]));
+  const series = [...new Set(viewRows.map((row) => String(row.series || '').trim()).filter(Boolean))].sort(compareBookText);
+  const statuses = [...new Set(viewRows.map((row) => String(row.status || '').trim()).filter(Boolean))].sort(compareBookText);
+  return `<div class="catalog-toolbar">
+    <nav class="catalog-tabs" aria-label="Book catalog shelves">
+      ${bookCatalogTab('active', 'Active Pipeline', counts.active, filters)}
+      ${bookCatalogTab('published', 'Published', counts.published, filters)}
+      ${bookCatalogTab('all', 'All Books', counts.all, filters)}
+    </nav>
+    <form class="catalog-filters" method="get" action="/books">
+      <input type="hidden" name="view" value="${escapeHtml(filters.view)}">
+      <div class="field catalog-search"><label>Search</label><input name="q" value="${escapeHtml(filters.q)}" placeholder="Title, series, notes..."></div>
+      <div class="field"><label>Pen Name</label><select name="pen"><option value="">All pen names</option>${pens.map(([id, name]) => `<option value="${escapeHtml(id)}" ${filters.pen === id ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Series</label><select name="series"><option value="">All series</option>${series.map((name) => `<option value="${escapeHtml(name)}" ${filters.series === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Status</label><select name="status"><option value="">All statuses</option>${statuses.map((status) => `<option value="${escapeHtml(status)}" ${filters.status === status ? 'selected' : ''}>${escapeHtml(status)}</option>`).join('')}</select></div>
+      <div class="field"><label>Sort</label><select name="sort"><option value="release" ${filters.sort === 'release' ? 'selected' : ''}>Release date</option><option value="series" ${filters.sort === 'series' ? 'selected' : ''}>Series order</option><option value="title" ${filters.sort === 'title' ? 'selected' : ''}>Title</option><option value="updated" ${filters.sort === 'updated' ? 'selected' : ''}>Recently updated</option></select></div>
+      <div class="catalog-filter-actions"><button type="submit">Apply</button><a class="button secondary" href="/books?view=${escapeHtml(filters.view)}">Clear</a></div>
+    </form>
+  </div>`;
+}
+
+function bookCatalogTab(view, label, count, filters) {
+  const params = new URLSearchParams({ view });
+  if (filters.q) params.set('q', filters.q);
+  if (filters.pen) params.set('pen', filters.pen);
+  if (filters.sort && filters.sort !== 'release') params.set('sort', filters.sort);
+  return `<a class="catalog-tab ${filters.view === view ? 'active' : ''}" href="/books?${escapeHtml(params.toString())}"><span>${escapeHtml(label)}</span><strong>${count}</strong></a>`;
+}
+
+function bookReleaseCell(row) {
+  const actual = String(row.actual_release || '').trim();
+  const planned = String(row.planned_release || '').trim();
+  if (actual) return `<strong>${escapeHtml(actual)}</strong><span class="tiny">Actual</span>`;
+  if (planned) return `<strong>${escapeHtml(planned)}</strong><span class="tiny">Planned</span>`;
+  return '<span class="muted">Not scheduled</span>';
 }
 
 function allUpcomingBooks() {

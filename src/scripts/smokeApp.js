@@ -68,6 +68,12 @@ try {
   });
   const preorderSave = await fetch(`${handle.url}/books`, { method: 'POST', body: preorderBody, redirect: 'manual' });
   if (preorderSave.status !== 302) throw new Error(`Pre-order book save returned ${preorderSave.status}.`);
+  await expectPage(handle.url, '/books', 'Active Pipeline');
+  await expectPage(handle.url, '/books?add=1', 'id="add-book" open');
+  await expectPage(handle.url, '/books', 'Preorder Smoke Test');
+  await expectPage(handle.url, '/books?view=published', 'Published Words Smoke Test');
+  await expectPage(handle.url, '/books?view=published', '1 shown');
+  await expectPage(handle.url, '/books?q=Preorder', '1 shown');
   const challengeSave = await fetch(`${handle.url}/goals/published-words-challenge`, { method: 'POST', redirect: 'manual' });
   if (challengeSave.status !== 302) throw new Error(`Published words challenge returned ${challengeSave.status}.`);
   await expectPage(handle.url, '/goals', '10.0%');
