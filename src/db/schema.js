@@ -101,6 +101,7 @@ export const expenses = sqliteTable('expenses', {
   description: text('description'),
   category: text('category').notNull(),
   penNameId: integer('pen_name_id').references(() => penNames.id),
+  subscriptionId: integer('subscription_id').references(() => subscriptions.id),
   paymentMethod: text('payment_method'),
   recurring: integer('recurring', { mode: 'boolean' }).notNull().default(false),
   amount: real('amount').notNull(),
@@ -164,6 +165,9 @@ export const brainDocuments = sqliteTable('brain_documents', {
   sizeBytes: integer('size_bytes').notNull().default(0),
   modifiedAt: text('modified_at'),
   indexedAt: text('indexed_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+  archivedAt: text('archived_at'),
+  archiveReason: text('archive_reason'),
   ...timestamps
 });
 

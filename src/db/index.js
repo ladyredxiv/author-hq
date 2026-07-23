@@ -122,6 +122,7 @@ export function initializeDatabase() {
       description TEXT,
       category TEXT NOT NULL,
       pen_name_id INTEGER REFERENCES pen_names(id),
+      subscription_id INTEGER REFERENCES subscriptions(id),
       payment_method TEXT,
       recurring INTEGER NOT NULL DEFAULT 0,
       amount REAL NOT NULL,
@@ -192,6 +193,9 @@ export function initializeDatabase() {
       size_bytes INTEGER NOT NULL DEFAULT 0,
       modified_at TEXT,
       indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      archived INTEGER NOT NULL DEFAULT 0,
+      archived_at TEXT,
+      archive_reason TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -594,6 +598,10 @@ function migrateColumns() {
   ensure('content_posts', 'verified_live', 'verified_live INTEGER NOT NULL DEFAULT 0');
   ensure('kdp_listings', 'manuscript_analysis_id', 'manuscript_analysis_id INTEGER REFERENCES kdp_manuscript_analyses(id)');
   ensure('royalty_entries', 'free_units', 'free_units INTEGER NOT NULL DEFAULT 0');
+  ensure('expenses', 'subscription_id', 'subscription_id INTEGER REFERENCES subscriptions(id)');
+  ensure('brain_documents', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
+  ensure('brain_documents', 'archived_at', 'archived_at TEXT');
+  ensure('brain_documents', 'archive_reason', 'archive_reason TEXT');
   // KDP's order-status sheets repeat paid sales already represented by Combined Sales.
   // Older imports stored those status rows as sales, so remove only those imported duplicates.
   sqlite.exec(`

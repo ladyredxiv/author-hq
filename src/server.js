@@ -519,10 +519,11 @@ app.post('/books/:id/delete', (req, res) => {
 
 app.get('/brain', (req, res) => {
   const q = String(req.query.q || '').trim();
+  const includeArchived = String(req.query.includeArchived || '') === '1';
   const roots = brainRoots();
-  const docs = q ? searchBrainDocuments(q, 80) : recentBrainDocuments(80);
+  const docs = q ? searchBrainDocuments(q, 80, { includeArchived }) : recentBrainDocuments(80, { includeArchived });
   const notes = q ? searchBrainNotes(q, 80) : recentBrainNotes(20);
-  const totals = sqlite.prepare('SELECT COUNT(*) AS count, MAX(indexed_at) AS last_indexed FROM brain_documents').get();
+  const totals = sqlite.prepare(`SELECT COUNT(*) AS count, SUM(CASE WHEN archived = 0 THEN 1 ELSE 0 END) AS active_count, SUM(CASE WHEN archived = 1 THEN 1 ELSE 0 END) AS archived_count, MAX(indexed_at) AS last_indexed FROM brain_documents`).get();
   const noteTotals = sqlite.prepare('SELECT COUNT(*) AS count FROM brain_notes').get();
   const improvementRuns = recentImprovementRuns(8);
   const improvementItems = improvementItemsForReview({ status: 'Proposed', limit: 8 });
@@ -538,10 +539,10 @@ app.get('/brain', (req, res) => {
           <form method="post" action="/brain/index"><button>Scan All</button></form>
         </div>
         <div class="metric-strip">
-          <div class="metric-tile"><span class="eyebrow">Indexed docs</span><strong>${totals.count || 0}</strong><small>${totals.last_indexed ? `last scan ${formatDateTime(totals.last_indexed)}` : 'not scanned yet'}</small></div>
+          <div class="metric-tile"><span class="eyebrow">Active docs</span><strong>${totals.active_count || 0}</strong><small>${totals.last_indexed ? `last scan ${formatDateTime(totals.last_indexed)}` : 'not scanned yet'}</small></div>
           <div class="metric-tile"><span class="eyebrow">Roots</span><strong>${roots.length}</strong><small>registered writing folders</small></div>
           <div class="metric-tile"><span class="eyebrow">Brain notes</span><strong>${noteTotals.count || 0}</strong><small>facts, decisions, corrections</small></div>
-          <div class="metric-tile"><span class="eyebrow">Search</span><strong>${q ? docs.length + notes.length : 0}</strong><small>${q ? 'matching items' : 'enter a term'}</small></div>
+          <div class="metric-tile"><span class="eyebrow">Archived docs</span><strong>${totals.archived_count || 0}</strong><small>hidden, retained, reversible</small></div>
         </div>
       </section>
       <section class="card span-4 side-card"><h2>Capture Note</h2>${brainNoteForm()}</section>
@@ -558,6 +559,7 @@ app.get('/brain', (req, res) => {
           <form method="post" action="/brain/kb/sync"><button>Sync Writing Folders</button></form>
           <form method="post" action="/brain/improve"><button class="secondary">Suggest Improvements</button></form>
           <form method="post" action="/brain/maintenance"><button class="secondary">Run Brain Maintenance</button></form>
+          <form method="post" action="/brain/archive-completed-chapters"><button class="secondary">Archive Completed Chapters</button></form>
         </div>
         ${knowledgeBaseMoveForm()}
         ${improvementSchedulePanel()}
@@ -574,6 +576,7 @@ app.get('/brain', (req, res) => {
         <div class="section-title-row"><h2>Search Brain</h2><a class="button secondary" href="/brain">Recent</a></div>
         <form class="row" method="get" action="/brain">
           <input name="q" value="${escapeHtml(q)}" placeholder="Search title, path, snippet, tag, book, pen name...">
+          <label class="check-inline"><input type="checkbox" name="includeArchived" value="1" ${includeArchived ? 'checked' : ''}> Include archived</label>
           <button class="secondary">Search</button>
         </form>
       </section>
@@ -714,6 +717,7 @@ app.post('/brain/maintenance', (req, res) => {
         <ul>
           <li>Index: <code>${escapeHtml(result.indexPath)}</code></li>
           <li>Duplicate index rows removed: ${escapeHtml(result.duplicatesRemoved)}</li>
+          <li>Completed-book chapter records archived: ${escapeHtml(result.chaptersArchived)}</li>
           <li>Copyedit archive report: <code>${escapeHtml(result.copyeditReportPath)}</code></li>
         </ul>
         <p><a class="button secondary" href="/brain">Back to Brain</a></p>
@@ -722,6 +726,28 @@ app.post('/brain/maintenance', (req, res) => {
   } catch (error) {
     res.status(500).send(layout('Brain Maintenance Error', `<section class="card"><h2>Brain Maintenance Error</h2><p class="muted">${escapeHtml(error.message)}</p><p><a class="button secondary" href="/brain">Back</a></p></section>`, { active: 'brain' }));
   }
+});
+
+app.post('/brain/archive-completed-chapters', (req, res) => {
+  const count = archiveCompletedBookBrainDocs();
+  res.send(layout('Brain Archive Complete', `
+    <section class="card">
+      <h2>Completed Chapters Archived</h2>
+      <p class="muted">Archived ${count} completed-book chapter or draft records from the active Brain view.</p>
+      <p class="tiny">Original files were not moved or deleted. Archived records remain searchable and can be restored individually.</p>
+      <p><a class="button secondary" href="/brain?includeArchived=1">Review archived documents</a></p>
+    </section>
+  `, { active: 'brain' }));
+});
+
+app.post('/brain/documents/:id/archive', (req, res) => {
+  sqlite.prepare(`UPDATE brain_documents SET archived = 1, archived_at = CURRENT_TIMESTAMP, archive_reason = 'Archived manually', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(req.params.id);
+  res.redirect('/brain');
+});
+
+app.post('/brain/documents/:id/restore', (req, res) => {
+  sqlite.prepare(`UPDATE brain_documents SET archived = 0, archived_at = NULL, archive_reason = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(req.params.id);
+  res.redirect('/brain?includeArchived=1');
 });
 
 app.post('/brain/improvement-schedule', (req, res) => {
@@ -1199,8 +1225,9 @@ app.post('/milestones', (req, res) => {
 
 app.get('/expenses', (req, res) => {
   const rows = sqlite.prepare(`
-    SELECT e.*, p.display_name AS pen_name FROM expenses e
+    SELECT e.*, p.display_name AS pen_name, s.service AS subscription_service FROM expenses e
     LEFT JOIN pen_names p ON p.id = e.pen_name_id
+    LEFT JOIN subscriptions s ON s.id = e.subscription_id
     ORDER BY e.date DESC, e.id DESC LIMIT 100
   `).all();
   const rollup = expenseCategoryRollup();
@@ -1208,7 +1235,7 @@ app.get('/expenses', (req, res) => {
     <div class="grid">
       <section class="card span-5"><h2>Add Expense</h2>${expenseForm()}</section>
       <section class="card span-7"><h2>This Month By Category</h2>${rollup.length ? table(['Category','Rows','Total'], rollup.map((r) => [r.category || 'Uncategorized', r.count, money(r.total)])) : '<p class="muted">No expenses logged this month.</p>'}</section>
-      <section class="span-12"><h2>Recent Expenses</h2>${rows.length ? table(['Date','Vendor','Category','Pen','Amount'], rows.map((r) => [r.date, r.vendor, r.category, r.pen_name || '', money(r.amount)])) : '<p class="muted">No expenses yet.</p>'}</section>
+      <section class="span-12"><h2>Recent Expenses</h2>${rows.length ? table(['Date','Vendor','Category','Subscription','Pen','Amount'], rows.map((r) => [r.date, r.vendor, r.category, r.subscription_service || '', r.pen_name || '', money(r.amount)])) : '<p class="muted">No expenses yet.</p>'}</section>
     </div>
   `, { active: 'expenses' }));
 });
@@ -1216,14 +1243,15 @@ app.get('/expenses', (req, res) => {
 app.post('/expenses', (req, res) => {
   const penNameId = req.body.penNameId || null;
   sqlite.prepare(`
-    INSERT INTO expenses (date, vendor, description, category, pen_name_id, payment_method, recurring, amount, receipt_saved, notes)
-    VALUES (@date, @vendor, @description, @category, @penNameId, @paymentMethod, @recurring, @amount, @receiptSaved, @notes)
+    INSERT INTO expenses (date, vendor, description, category, pen_name_id, subscription_id, payment_method, recurring, amount, receipt_saved, notes)
+    VALUES (@date, @vendor, @description, @category, @penNameId, @subscriptionId, @paymentMethod, @recurring, @amount, @receiptSaved, @notes)
   `).run({
     date: req.body.date || todayIso(),
     vendor: req.body.vendor,
     description: req.body.description || '',
     category: req.body.category || 'Miscellaneous',
     penNameId,
+    subscriptionId: req.body.subscriptionId || null,
     paymentMethod: req.body.paymentMethod || 'Credit Card',
     recurring: req.body.recurring ? 1 : 0,
     amount: parseMoney(req.body.amount),
@@ -1340,11 +1368,19 @@ app.post('/royalties/import', upload.single('royalties'), (req, res) => {
 app.get('/subscriptions', (req, res) => {
   const rows = sqlite.prepare('SELECT * FROM subscriptions ORDER BY active DESC, renewal_date').all();
   const monthly = rows.filter((r) => r.active).reduce((sum, r) => sum + billingMonthlyEquivalent(r.monthly_cost, r.billing_cycle), 0);
+  const reconciliation = subscriptionReconciliation(rows);
   res.send(layout('Subscriptions', `
     <section class="card"><h2>Add Subscription</h2>${subscriptionForm()}</section>
     <section class="card"><h2>Monthly Set Aside</h2><div class="metric">${money(monthly)}</div><p class="muted">${money(monthly / 2)} per twice-monthly paycheck, ${money((monthly * 12) / 26)} biweekly.</p></section>
+    <section class="card"><div class="section-title-row"><div><h2>Expense Reconciliation</h2><p class="muted">Confirm that subscription charges actually appeared in your expense log.</p></div><span class="pill">${reconciliation.filter((row) => row.status === 'Matched').length} matched</span></div>${subscriptionReconciliationTable(reconciliation)}</section>
     <section><h2>Subscriptions</h2>${subscriptionsTable(rows)}</section>
   `, { active: 'subscriptions' }));
+});
+
+app.post('/subscriptions/:id/link-expense', (req, res) => {
+  const expenseId = Number(req.body.expenseId || 0);
+  if (expenseId) sqlite.prepare('UPDATE expenses SET subscription_id = ?, recurring = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id, expenseId);
+  res.redirect('/subscriptions');
 });
 
 app.get('/subscriptions/:id/edit', (req, res) => {
@@ -2202,9 +2238,9 @@ async function saveParsedEntry(parsed) {
     return;
   }
   sqlite.prepare(`
-    INSERT INTO expenses (date, vendor, description, category, payment_method, recurring, amount, receipt_saved, notes)
-    VALUES (@date, @vendor, @description, @category, @paymentMethod, @recurring, @amount, @receiptSaved, @notes)
-  `).run({ ...parsed, recurring: parsed.recurring ? 1 : 0 });
+    INSERT INTO expenses (date, vendor, description, category, subscription_id, payment_method, recurring, amount, receipt_saved, notes)
+    VALUES (@date, @vendor, @description, @category, @subscriptionId, @paymentMethod, @recurring, @amount, @receiptSaved, @notes)
+  `).run({ ...parsed, subscriptionId: matchSubscriptionForExpense(parsed)?.id || null, recurring: parsed.recurring ? 1 : 0 });
 }
 
 function allPenNames({ includeInactive = false } = {}) {
@@ -2214,6 +2250,10 @@ function allPenNames({ includeInactive = false } = {}) {
 
 function allBooks() {
   return sqlite.prepare('SELECT * FROM books ORDER BY title').all();
+}
+
+function allSubscriptions({ includeInactive = true } = {}) {
+  return sqlite.prepare(`SELECT * FROM subscriptions ${includeInactive ? '' : 'WHERE active = 1'} ORDER BY active DESC, service`).all();
 }
 
 function lifeTasks({ status = 'Open', dueBefore = '', includeUndated = true, limit = 20 } = {}) {
@@ -2486,8 +2526,111 @@ function expenseCategoryRollup() {
   `).all(todayIso());
 }
 
+function subscriptionReconciliation(subscriptions = allSubscriptions()) {
+  const expenses = sqlite.prepare(`SELECT * FROM expenses ORDER BY date DESC, id DESC LIMIT 1000`).all();
+  const explicitlyLinked = new Map();
+  const suggestedExpenseIds = new Set();
+  expenses.forEach((expense) => {
+    if (!expense.subscription_id) return;
+    const key = String(expense.subscription_id);
+    if (!explicitlyLinked.has(key)) explicitlyLinked.set(key, expense);
+  });
+
+  return subscriptions.map((subscription) => {
+    const linkedExpense = explicitlyLinked.get(String(subscription.id));
+    if (!subscription.active) return { subscription, expense: linkedExpense || null, status: 'Paused', detail: 'Inactive subscription' };
+    if (linkedExpense) return subscriptionMatchStatus(subscription, linkedExpense);
+    const suggestion = bestSubscriptionExpenseCandidate(
+      subscription,
+      expenses.filter((expense) => !expense.subscription_id && !suggestedExpenseIds.has(expense.id)),
+    );
+    if (suggestion) {
+      suggestedExpenseIds.add(suggestion.id);
+      return { subscription, expense: suggestion, status: 'Suggested', detail: 'Confirm this likely charge' };
+    }
+    return { subscription, expense: null, status: 'Missing', detail: 'No linked or likely expense found' };
+  });
+}
+
+function subscriptionMatchStatus(subscription, expense) {
+  const expected = Number(subscription.monthly_cost || 0);
+  const actual = Number(expense.amount || 0);
+  const amountTolerance = Math.max(0.5, Math.abs(expected) * 0.08);
+  if (Math.abs(expected - actual) > amountTolerance) {
+    return { subscription, expense, status: 'Amount changed', detail: `${money(actual)} logged vs ${money(expected)} expected` };
+  }
+  const maxAge = subscriptionBillingWindowDays(subscription.billing_cycle);
+  const age = daysSinceIso(expense.date);
+  if (maxAge && age > maxAge) return { subscription, expense, status: 'Overdue', detail: `Last linked charge was ${age} days ago` };
+  return { subscription, expense, status: 'Matched', detail: `Charge logged ${expense.date}` };
+}
+
+function subscriptionBillingWindowDays(cycle) {
+  const normalized = String(cycle || '').toLowerCase();
+  if (normalized.includes('week')) return 12;
+  if (normalized.includes('quarter')) return 110;
+  if (normalized.includes('year') || normalized.includes('annual')) return 400;
+  if (normalized.includes('one')) return 0;
+  return 45;
+}
+
+function daysSinceIso(value) {
+  const date = new Date(`${String(value || '').slice(0, 10)}T12:00:00`);
+  const today = new Date(`${todayIso()}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return 99999;
+  return Math.max(0, Math.floor((today - date) / 86400000));
+}
+
+function bestSubscriptionExpenseCandidate(subscription, expenses) {
+  const service = normalizeMatchText(subscription.service);
+  const serviceTokens = service.split(' ').filter((token) => token.length > 2);
+  const expected = Number(subscription.monthly_cost || 0);
+  return expenses
+    .map((expense) => {
+      const vendor = normalizeMatchText(`${expense.vendor} ${expense.description || ''}`);
+      const tokenMatches = serviceTokens.filter((token) => vendor.includes(token)).length;
+      const nameMatch = vendor === service || vendor.includes(service) || service.includes(vendor);
+      const amountMatch = Math.abs(Number(expense.amount || 0) - expected) <= Math.max(0.5, Math.abs(expected) * 0.08);
+      const strongTokenMatch = serviceTokens.length > 0 && tokenMatches / serviceTokens.length >= 0.6;
+      const score = (nameMatch ? 5 : 0) + (strongTokenMatch ? 3 : 0) + (amountMatch ? 2 : 0) + (expense.recurring ? 1 : 0);
+      return { expense, score };
+    })
+    .filter((candidate) => candidate.score >= 5)
+    .sort((a, b) => b.score - a.score || String(b.expense.date).localeCompare(String(a.expense.date)))[0]?.expense || null;
+}
+
+function matchSubscriptionForExpense(expense) {
+  return allSubscriptions({ includeInactive: false }).find((subscription) => {
+    const service = normalizeMatchText(subscription.service);
+    const vendor = normalizeMatchText(`${expense.vendor || ''} ${expense.description || ''}`);
+    return service && vendor && (vendor.includes(service) || service.includes(vendor));
+  }) || null;
+}
+
+function subscriptionReconciliationTable(rows) {
+  if (!rows.length) return '<p class="muted">No subscriptions yet.</p>';
+  return `<table class="reconciliation-table"><thead><tr><th>Subscription</th><th>Expected Charge</th><th>Expense</th><th>Status</th><th></th></tr></thead><tbody>
+    ${rows.map(({ subscription, expense, status, detail }) => `<tr>
+      <td><strong>${escapeHtml(subscription.service)}</strong><br><span class="tiny">${escapeHtml(subscription.billing_cycle)}</span></td>
+      <td>${money(subscription.monthly_cost)}</td>
+      <td>${expense ? `<strong>${escapeHtml(expense.vendor)}</strong><br><span class="tiny">${escapeHtml(expense.date)} &middot; ${money(expense.amount)}</span>` : '<span class="muted">None found</span>'}</td>
+      <td><span class="reconcile-status status-${escapeHtml(status.toLowerCase().replace(/\s+/g, '-'))}">${escapeHtml(status)}</span><br><span class="tiny">${escapeHtml(detail)}</span></td>
+      <td>${status === 'Suggested' && expense ? `<form method="post" action="/subscriptions/${escapeHtml(subscription.id)}/link-expense"><input type="hidden" name="expenseId" value="${escapeHtml(expense.id)}"><button class="secondary">Confirm Link</button></form>` : ''}</td>
+    </tr>`).join('')}
+  </tbody></table>`;
+}
+
 function applyImprovementItem(item) {
   const text = `${item.title || ''} ${item.body || ''}`.toLowerCase();
+  if (text.includes('expense-to-subscription') || (text.includes('subscription') && text.includes('reconciliation'))) {
+    const noteId = saveImprovementDecisionNote(item, 'Applied: the Subscriptions page now reconciles expected charges against explicitly linked expenses, suggests strong likely matches for confirmation, and flags missing, overdue, or changed amounts.');
+    return { status: 'Applied', noteId };
+  }
+  if (text.includes('retention policy') && (text.includes('chapter') || text.includes('draft'))) {
+    const archived = archiveCompletedBookBrainDocs();
+    const noteId = saveImprovementDecisionNote(item, `Applied: completed-book chapter and draft index records are archived from the active Brain view after a book is marked Published/Live. Original source files are never moved or deleted, archived records remain searchable, and each can be restored. Archived ${archived} records now.`);
+    return { status: 'Applied', noteId };
+  }
   if (text.includes('expense category')) {
     const noteId = saveImprovementDecisionNote(item, 'Applied: monthly expense category rollup is now visible on the Expenses page.');
     return { status: 'Applied', noteId };
@@ -2542,19 +2685,20 @@ function saveImprovementDecisionNote(item, body) {
   }).lastInsertRowid;
 }
 
-function recentBrainDocuments(limit = 80) {
+function recentBrainDocuments(limit = 80, { includeArchived = false } = {}) {
   return sqlite.prepare(`
     SELECT d.*, r.label AS root_label, p.display_name AS pen_name, b.title AS book_title
     FROM brain_documents d
     LEFT JOIN brain_roots r ON r.id = d.root_id
     LEFT JOIN pen_names p ON p.id = d.pen_name_id
     LEFT JOIN books b ON b.id = d.book_id
+    ${includeArchived ? '' : 'WHERE COALESCE(d.archived, 0) = 0'}
     ORDER BY COALESCE(d.modified_at, d.indexed_at) DESC
     LIMIT ?
   `).all(limit);
 }
 
-function searchBrainDocuments(query, limit = 80) {
+function searchBrainDocuments(query, limit = 80, { includeArchived = false } = {}) {
   const like = `%${String(query || '').toLowerCase()}%`;
   return sqlite.prepare(`
     SELECT d.*, r.label AS root_label, p.display_name AS pen_name, b.title AS book_title
@@ -2562,13 +2706,14 @@ function searchBrainDocuments(query, limit = 80) {
     LEFT JOIN brain_roots r ON r.id = d.root_id
     LEFT JOIN pen_names p ON p.id = d.pen_name_id
     LEFT JOIN books b ON b.id = d.book_id
-    WHERE lower(d.file_name) LIKE @like
+    WHERE (${includeArchived ? '1 = 1' : 'COALESCE(d.archived, 0) = 0'})
+      AND (lower(d.file_name) LIKE @like
        OR lower(d.file_path) LIKE @like
        OR lower(COALESCE(d.title, '')) LIKE @like
        OR lower(COALESCE(d.snippet, '')) LIKE @like
        OR lower(COALESCE(d.tags, '')) LIKE @like
        OR lower(COALESCE(p.display_name, '')) LIKE @like
-       OR lower(COALESCE(b.title, '')) LIKE @like
+       OR lower(COALESCE(b.title, '')) LIKE @like)
     ORDER BY COALESCE(d.modified_at, d.indexed_at) DESC
     LIMIT @limit
   `).all({ like, limit });
@@ -2875,19 +3020,20 @@ function runBrainMaintenance({ logRun = true } = {}) {
   const paths = knowledgeBasePaths();
   setupKnowledgeBase({ logRun: false });
   const duplicatesRemoved = cleanupTimestampedDuplicateBrainDocs();
+  const chaptersArchived = archiveCompletedBookBrainDocs();
   const indexPath = writeBrainDocumentIndex(paths);
   const copyeditReportPath = writeCopyeditArchiveCandidateReport(paths);
-  const summary = `Updated Brain document index, removed ${duplicatesRemoved} duplicate timestamped index rows, and refreshed copyedit archive candidates.`;
+  const summary = `Updated Brain document index, removed ${duplicatesRemoved} duplicate timestamped index rows, archived ${chaptersArchived} completed-book chapter records, and refreshed copyedit archive candidates.`;
   if (logRun) {
     logImprovementRun({
       runType: 'brain-maintenance',
       provider: 'local',
       summary,
       outputPath: indexPath,
-      rawOutput: `Index: ${indexPath}\nDuplicates removed: ${duplicatesRemoved}\nCopyedit report: ${copyeditReportPath}`
+      rawOutput: `Index: ${indexPath}\nDuplicates removed: ${duplicatesRemoved}\nCompleted chapters archived: ${chaptersArchived}\nCopyedit report: ${copyeditReportPath}`
     });
   }
-  return { summary, indexPath, duplicatesRemoved, copyeditReportPath };
+  return { summary, indexPath, duplicatesRemoved, chaptersArchived, copyeditReportPath };
 }
 
 function writeBrainDocumentIndex(paths) {
@@ -2897,6 +3043,7 @@ function writeBrainDocumentIndex(paths) {
     LEFT JOIN brain_roots r ON r.id = d.root_id
     LEFT JOIN pen_names p ON p.id = d.pen_name_id
     LEFT JOIN books b ON b.id = d.book_id
+    WHERE COALESCE(d.archived, 0) = 0
     ORDER BY r.label, d.file_path
   `).all();
   const groups = new Map();
@@ -2968,6 +3115,26 @@ function canonicalBrainFileName(fileName) {
 
 function timestampedBrainFileName(fileName) {
   return /(?:\s|_|-)\d{8}(?:\s|_|-)?\d{4,6}(?=\.[^.]+$)/.test(fileName) || /(?:\s|_|-)\d{8}(?=\.[^.]+$)/.test(fileName);
+}
+
+function archiveCompletedBookBrainDocs() {
+  return sqlite.prepare(`
+    UPDATE brain_documents
+    SET archived = 1,
+        archived_at = CURRENT_TIMESTAMP,
+        archive_reason = 'Book marked Published/Live; chapter draft retained outside active Brain view',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE COALESCE(archived, 0) = 0
+      AND book_id IN (
+        SELECT id FROM books
+        WHERE lower(trim(COALESCE(status, ''))) IN ('published', 'published live', 'live')
+      )
+      AND (
+        lower(COALESCE(file_path, '') || ' ' || COALESCE(title, '')) LIKE '%chapter%'
+        OR lower(COALESCE(file_path, '') || ' ' || COALESCE(title, '')) LIKE '%draft%'
+        OR lower(COALESCE(tags, '')) LIKE '%"draft"%'
+      )
+  `).run().changes;
 }
 
 function writeCopyeditArchiveCandidateReport(paths) {
@@ -4224,6 +4391,8 @@ function improvementResolutionForm(item) {
 
 function improvementBuiltInLabel(item) {
   const text = `${item.title || ''} ${item.body || ''}`.toLowerCase();
+  if (text.includes('expense-to-subscription') || (text.includes('subscription') && text.includes('reconciliation'))) return 'reconcile subscription charges with linked expenses and suggested matches';
+  if (text.includes('retention policy') && (text.includes('chapter') || text.includes('draft'))) return 'archive completed-book chapter records without deleting source files';
   if (text.includes('expense category')) return 'show this-month expense category rollups on the Expenses page';
   if (text.includes('income') && text.includes('royalt')) return 'save the royalty-vs-income policy as a Brain decision';
   if (text.includes('brain notes') && text.includes('brain documents')) return 'save the Brain notes/documents distinction as a workflow decision';
@@ -4238,6 +4407,12 @@ function improvementBuiltInLabel(item) {
 
 function defaultImprovementAnswer(item) {
   const text = `${item.title || ''} ${item.body || ''}`.toLowerCase();
+  if (text.includes('expense-to-subscription') || (text.includes('subscription') && text.includes('reconciliation'))) {
+    return 'Add an expense-to-subscription reconciliation view. Explicit links are authoritative; Author HQ may suggest strong vendor matches, but I confirm them before they count. Flag missing, overdue, and changed charges.';
+  }
+  if (text.includes('retention policy') && (text.includes('chapter') || text.includes('draft'))) {
+    return 'When a linked book is marked Published or Live, archive chapter and draft records from the active Brain index during maintenance. Never delete or move original manuscript files. Keep archived records searchable and individually restorable.';
+  }
   if (text.includes('income') && text.includes('royalt')) {
     return 'Royalties and income stay separate by design. Royalties track book performance over reporting periods; income is for actual payouts or manual non-royalty income entries.';
   }
@@ -4283,12 +4458,13 @@ function brainNotesTable(rows) {
 }
 
 function brainDocumentsTable(rows) {
-  return `<table><thead><tr><th>Document</th><th>Book / Pen</th><th>Tags</th><th>Modified</th></tr></thead><tbody>
+  return `<table><thead><tr><th>Document</th><th>Book / Pen</th><th>Tags</th><th>Modified</th><th></th></tr></thead><tbody>
     ${rows.map((row) => `<tr>
-      <td><strong>${escapeHtml(row.title || row.file_name)}</strong><br><span class="tiny">${escapeHtml(row.file_path)}</span>${row.snippet ? `<p class="tiny">${escapeHtml(row.snippet)}</p>` : ''}</td>
+      <td>${row.archived ? '<span class="pill">Archived</span><br>' : ''}<strong>${escapeHtml(row.title || row.file_name)}</strong><br><span class="tiny">${escapeHtml(row.file_path)}</span>${row.snippet ? `<p class="tiny">${escapeHtml(row.snippet)}</p>` : ''}${row.archive_reason ? `<p class="tiny">${escapeHtml(row.archive_reason)}</p>` : ''}</td>
       <td>${escapeHtml(row.book_title || '')}<br><span class="tiny">${escapeHtml(row.pen_name || row.root_label || '')}</span></td>
       <td>${brainTagPills(row.tags)}</td>
       <td>${escapeHtml(formatDateTime(row.modified_at))}</td>
+      <td><form method="post" action="/brain/documents/${escapeHtml(row.id)}/${row.archived ? 'restore' : 'archive'}"><button class="secondary">${row.archived ? 'Restore' : 'Archive'}</button></form></td>
     </tr>`).join('')}
   </tbody></table>`;
 }
@@ -5566,7 +5742,7 @@ function formatDateTime(value) {
 function expenseForm() {
   return `<form class="stack" method="post" action="/expenses">
     <div class="row"><div class="field"><label>Date</label><input name="date" type="date" value="${todayIso()}"></div><div class="field"><label>Vendor</label><input name="vendor" required></div><div class="field"><label>Amount</label><input name="amount" required></div></div>
-    <div class="row"><div class="field"><label>Category</label><input name="category" value="Miscellaneous"></div><div class="field"><label>Pen Name</label><select name="penNameId"><option value="">General</option>${options(allPenNames(), '')}</select></div><div class="field"><label>Payment</label><input name="paymentMethod" value="Credit Card"></div></div>
+    <div class="row"><div class="field"><label>Category</label><input name="category" value="Miscellaneous"></div><div class="field"><label>Subscription</label><select name="subscriptionId"><option value="">Not a subscription</option>${options(allSubscriptions({ includeInactive: false }), '', { value: 'id', label: 'service' })}</select></div><div class="field"><label>Pen Name</label><select name="penNameId"><option value="">General</option>${options(allPenNames(), '')}</select></div><div class="field"><label>Payment</label><input name="paymentMethod" value="Credit Card"></div></div>
     <label><input type="checkbox" name="recurring"> Recurring</label><textarea name="description" placeholder="Description"></textarea><textarea name="notes" placeholder="Notes"></textarea><button>Save Expense</button>
   </form>`;
 }
@@ -6121,23 +6297,25 @@ function importMilestones(rows) {
 
 function importExpenses(rows) {
   const stmt = sqlite.prepare(`
-    INSERT INTO expenses (date, vendor, description, category, pen_name_id, payment_method, recurring, amount, receipt_saved, notes)
-    VALUES (@date, @vendor, @description, @category, @penNameId, @paymentMethod, @recurring, @amount, @receiptSaved, @notes)
+    INSERT INTO expenses (date, vendor, description, category, pen_name_id, subscription_id, payment_method, recurring, amount, receipt_saved, notes)
+    VALUES (@date, @vendor, @description, @category, @penNameId, @subscriptionId, @paymentMethod, @recurring, @amount, @receiptSaved, @notes)
   `);
   const tx = sqlite.transaction((items) => {
     items.forEach((row) => {
       const vendor = pick(row, ['Vendor']);
       if (!vendor) return;
       const pen = findPenName(pick(row, ['Pen Name', 'Pen']));
+      const expense = { vendor, description: pick(row, ['Description']), amount: parseMoney(pick(row, ['Amount'], '0')) };
       stmt.run({
         date: normalizeDate(pick(row, ['Date'], todayIso())),
         vendor,
-        description: pick(row, ['Description']),
+        description: expense.description,
         category: pick(row, ['Category'], 'Miscellaneous'),
         penNameId: pen?.id || null,
+        subscriptionId: matchSubscriptionForExpense(expense)?.id || null,
         paymentMethod: pick(row, ['Payment Method', 'Payment'], 'Credit Card'),
         recurring: truthy(pick(row, ['Recurring'])),
-        amount: parseMoney(pick(row, ['Amount'], '0')),
+        amount: expense.amount,
         receiptSaved: pick(row, ['Receipt Saved'], 'No'),
         notes: pick(row, ['Notes'])
       });
