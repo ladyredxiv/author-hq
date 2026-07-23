@@ -1550,6 +1550,7 @@ app.get('/kdp-listings', (req, res) => {
       <h2>Saved Packets</h2>
       ${savedKdpListingsTable(listings)}
     </section>
+    ${kdpGenerationScript()}
   `, { active: 'kdp' }));
 });
 
@@ -5241,7 +5242,7 @@ function kdpListingForm({ selectedBookId = '', analyses = [] } = {}) {
   const firstConfig = firstPen ? kdpGenreConfigForPen(firstPen.id) : null;
   const usableAnalyses = analyses.filter((row) => ['Complete', 'Reviewed'].includes(row.status));
   const selectedAnalysis = usableAnalyses.find((row) => String(row.book_id) === String(selectedBookId)) || null;
-  return `<form class="stack" method="post" action="/kdp-listings">
+  return `<form class="stack" method="post" action="/kdp-listings" data-kdp-generation-form data-working-label="Generating packet...">
     <div class="row">
       <div class="field"><label>Book</label><select name="bookId"><option value="">New / not in Books yet</option>${options(books, selectedBookId, { value: 'id', label: 'title' })}</select></div>
       <div class="field"><label>Pen Name</label><select name="penNameId" id="kdp-pen-select" onchange="applyKdpDefaults()">${kdpPenOptions(penNames, firstPen?.id || '')}</select></div>
@@ -5270,7 +5271,8 @@ function kdpListingForm({ selectedBookId = '', analyses = [] } = {}) {
     <input name="publicationRights" value="I own the copyright and hold necessary publishing rights">
     <p class="tiny">Pricing note: KDP's 70% royalty band is generally $2.99-$9.99. Anything outside that range may fall to 35%.</p>
     <p class="tiny bad">AI disclosure is a required confirmation. Check this every time before publishing.</p>
-    <button>Generate Packet</button>
+    <button data-kdp-generation-submit>Generate Packet</button>
+    ${kdpGenerationStatus('Claude is building your KDP packet...')}
   </form>
   <script>
     function applyKdpDefaults() {
@@ -5305,8 +5307,9 @@ function savedKdpListingsTable(rows) {
       <td>
         <div class="action-row">
           <a class="button secondary" href="/kdp-listings/${escapeHtml(row.id)}">Open</a>
-          <form method="post" action="/kdp-listings/${escapeHtml(row.id)}/regenerate" onsubmit="return confirm('Regenerate this packet using the current KDP rules and category filters?');">
-            <button class="secondary" type="submit">Regenerate</button>
+          <form method="post" action="/kdp-listings/${escapeHtml(row.id)}/regenerate" data-kdp-generation-form data-kdp-confirm="Regenerate this packet using the current KDP rules and category filters?" data-working-label="Regenerating...">
+            <button class="secondary" type="submit" data-kdp-generation-submit>Regenerate</button>
+            ${kdpGenerationStatus('Claude is rebuilding this packet...', true)}
           </form>
         </div>
       </td>
@@ -5327,8 +5330,9 @@ function kdpPacketView(row, packet) {
     <div class="row">
       <button type="button" class="secondary" onclick="copyText('packet-all')">Copy All</button>
       <a class="button secondary" href="/kdp-listings/${escapeHtml(row.id)}/text">Export .txt</a>
-      <form method="post" action="/kdp-listings/${escapeHtml(row.id)}/regenerate" onsubmit="return confirm('Regenerate this packet using the current KDP rules and category filters?');">
-        <button class="secondary" type="submit">Regenerate</button>
+      <form method="post" action="/kdp-listings/${escapeHtml(row.id)}/regenerate" data-kdp-generation-form data-kdp-confirm="Regenerate this packet using the current KDP rules and category filters?" data-working-label="Regenerating...">
+        <button class="secondary" type="submit" data-kdp-generation-submit>Regenerate</button>
+        ${kdpGenerationStatus('Claude is rebuilding this packet...', true)}
       </form>
     </div>
     <textarea id="packet-all" class="copybox">${escapeHtml(flatText)}</textarea>
@@ -5370,6 +5374,46 @@ function kdpPacketView(row, packet) {
       el.select();
       navigator.clipboard?.writeText(el.value);
     }
+  </script>
+  ${kdpGenerationScript()}`;
+}
+
+function kdpGenerationStatus(label, compact = false) {
+  return `<div class="kdp-generation-status${compact ? ' compact' : ''}" data-kdp-generation-status hidden role="status" aria-live="polite">
+    <span class="kdp-spinner" aria-hidden="true"></span>
+    <div><strong>${escapeHtml(label)}</strong><span>This can take a minute. Keep Author HQ open.</span></div>
+  </div>`;
+}
+
+function kdpGenerationScript() {
+  return `<script>
+    function initializeKdpGenerationForms() {
+      document.querySelectorAll('[data-kdp-generation-form]').forEach((form) => {
+        if (form.dataset.generationReady) return;
+        form.dataset.generationReady = '1';
+        form.addEventListener('submit', (event) => {
+          if (form.dataset.submitting) {
+            event.preventDefault();
+            return;
+          }
+          if (form.dataset.kdpConfirm && !window.confirm(form.dataset.kdpConfirm)) {
+            event.preventDefault();
+            return;
+          }
+          form.dataset.submitting = '1';
+          form.setAttribute('aria-busy', 'true');
+          const button = form.querySelector('[data-kdp-generation-submit]');
+          const status = form.querySelector('[data-kdp-generation-status]');
+          if (button) {
+            button.disabled = true;
+            button.textContent = form.dataset.workingLabel || 'Claude is generating...';
+          }
+          if (status) status.hidden = false;
+        });
+      });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initializeKdpGenerationForms, { once: true });
+    else initializeKdpGenerationForms();
   </script>`;
 }
 

@@ -14,6 +14,8 @@ try {
   await expectPage(handle.url, '/settings', 'Data Safety');
   await expectPage(handle.url, '/subscriptions', 'Monthly Set Aside');
   await expectPage(handle.url, '/kdp-listings', 'Analyze Chapter Folder');
+  await expectPage(handle.url, '/kdp-listings', 'data-kdp-generation-form');
+  await expectPage(handle.url, '/kdp-listings', 'Claude is building your KDP packet...');
   await expectPage(handle.url, '/newsletter', 'Start a Newsletter Workspace');
 
   const newsletterSave = await fetch(`${handle.url}/newsletter/projects`, {
