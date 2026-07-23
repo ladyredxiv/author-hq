@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+const defaultSettings = {
+  CO_TEACHING_CREDITS_URL: 'https://airtable.com/appzYmPFcz9Wxzn0X/shr7LT3Qux2r7Vv24'
+};
+
 const settingKeys = [
   'AUTH_PASSPHRASE',
   'COOKIE_SECRET',
@@ -59,14 +63,14 @@ export function saveSettings(input) {
 
 export function getSetting(key, fallback = '') {
   const settings = loadSettings();
-  return settings[key] || process.env[key] || fallback;
+  return settings[key] || process.env[key] || defaultSettings[key] || fallback;
 }
 
 export function redactedSettings() {
   const settings = loadSettings();
   const out = {};
   settingKeys.forEach((key) => {
-    const value = settings[key] || process.env[key] || '';
+    const value = settings[key] || process.env[key] || defaultSettings[key] || '';
     out[key] = isSecret(key) && value ? '********' : value;
   });
   return out;

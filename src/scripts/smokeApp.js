@@ -11,6 +11,7 @@ try {
   const { startServer } = await import('../server.js');
   handle = await startServer({ port: 0, host: '127.0.0.1' });
   await expectPage(handle.url, '/', 'Command Center');
+  await expectPage(handle.url, '/', 'Claim Credits');
   await expectPage(handle.url, '/settings', 'Data Safety');
   await expectPage(handle.url, '/subscriptions', 'Monthly Set Aside');
   await expectPage(handle.url, '/kdp-listings', 'Analyze Chapter Folder');
