@@ -672,6 +672,16 @@ function seedPenNames() {
       colorPalette: { accent: '#4f8f7f', ink: '#17211f', paper: '#f8fbf8' },
       fonts: { serif: 'Georgia', sans: 'Inter' },
       socialHandles: {}
+    },
+    {
+      key: 'ana-rourke',
+      displayName: 'Ana Rourke',
+      brandDetails: { genre: 'M/F erotica shorts', voice: 'direct, high-heat, compact, reader-forward' },
+      emailOctopusListId: null,
+      bufferChannels: {},
+      colorPalette: { accent: '#b64e6f', ink: '#17131a', paper: '#fbf7f9' },
+      fonts: { serif: 'Georgia', sans: 'Inter' },
+      socialHandles: {}
     }
   ];
 
@@ -802,6 +812,24 @@ function seedKdpGenreConfigs() {
       defaultPriceUsd: 4.99,
       defaultKuEnrolled: 0,
       aiGeneratedDefault: 0,
+      aiAssistedDefault: 1
+    },
+    {
+      key: 'ana-rourke',
+      status: 'verified',
+      voiceDescription: 'M/F erotica shorts with immediate heat, clear adult positioning, strong female agency, and compact reader payoff.',
+      coreTropes: ['dark romance', 'enemies to lovers', 'instalove', 'strangers', 'forbidden romance'],
+      targetAudience: 'Adult 18+ erotica-short readers who want explicit heat without a long wait.',
+      verifiedCategories: [
+        { path: 'Kindle Store > Kindle eBooks > Literature & Fiction > Erotica', rating: 'Fortress', notes: 'Required primary category for every Ana Rourke title.' },
+        { path: 'Kindle Store > Kindle eBooks > Literature & Fiction > Erotica > Romantic', rating: 'Fortress', notes: 'Use for explicit and non-dark projects.' },
+        { path: 'Kindle Store > Kindle eBooks > Literature & Fiction > Erotica > Dark', rating: 'Fortress', notes: 'Use for dark heat or CNC/dark-romance metadata.' }
+      ],
+      keywordStarterList: ['M/F erotica short story', 'steamy short read adult', 'forbidden romance explicit', 'alpha male erotica', 'kindle unlimited erotica'],
+      categoryStrategyNotes: 'Ana Rourke uses a locked two-category template. Category 2 is derived from project.json heatLevel, cncPresent, and tropes.',
+      defaultPriceUsd: 2.99,
+      defaultKuEnrolled: 1,
+      aiGeneratedDefault: 1,
       aiAssistedDefault: 1
     }
   ];

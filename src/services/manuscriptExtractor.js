@@ -48,14 +48,31 @@ export async function extractManuscript(buffer, fileName) {
 }
 
 export async function extractManuscriptCollection(files = []) {
-  const readable = files
-    .filter((file) => supportedExtensions.has(path.extname(String(file.originalname || '')).toLowerCase()))
+  const sortedFiles = [...files]
     .sort((a, b) => String(a.originalname).localeCompare(String(b.originalname), undefined, { numeric: true, sensitivity: 'base' }));
+  const projectFile = sortedFiles.find((file) => normalizedUploadPath(file.originalname).endsWith('/project.json') || normalizedUploadPath(file.originalname) === 'project.json');
+  const blurbFile = sortedFiles.find((file) => normalizedUploadPath(file.originalname).endsWith('/sessions/kdp-blurb.md') || normalizedUploadPath(file.originalname) === 'sessions/kdp-blurb.md');
+  const readable = sortedFiles.filter((file) => {
+    const uploadPath = normalizedUploadPath(file.originalname);
+    if (file === projectFile || file === blurbFile) return false;
+    if (uploadPath.includes('/sessions/')) return false;
+    return supportedExtensions.has(path.extname(String(file.originalname || '')).toLowerCase());
+  });
   if (!readable.length) throw new Error('That folder does not contain any supported chapter files.');
 
   const hash = crypto.createHash('sha256');
   const sections = [];
   const warnings = [];
+  let projectMetadata = null;
+  let kdpBlurb = '';
+  if (projectFile) {
+    try {
+      projectMetadata = JSON.parse(projectFile.buffer.toString('utf8'));
+    } catch {
+      warnings.push('project.json was found but could not be parsed.');
+    }
+  }
+  if (blurbFile) kdpBlurb = blurbFile.buffer.toString('utf8').trim();
   let wordCount = 0;
   for (const file of readable) {
     hash.update(String(file.originalname));
@@ -74,8 +91,14 @@ export async function extractManuscriptCollection(files = []) {
     fingerprint: hash.digest('hex'),
     warnings,
     chapterCount: readable.length,
-    chapterNames: readable.map((file) => file.originalname)
+    chapterNames: readable.map((file) => file.originalname),
+    projectMetadata,
+    kdpBlurb
   };
+}
+
+function normalizedUploadPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
 }
 
 async function extractEpub(buffer) {

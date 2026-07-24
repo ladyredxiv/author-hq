@@ -15,6 +15,7 @@ Author HQ is a local-first Electron app for author-business and life management.
 - Newsletter drafting interface plus EmailOctopus list stats hook.
 - KDP listing packets, adult-category filtering, public book export, and launch tracking.
 - Manuscript-aware KDP packets from DOCX, EPUB, PDF, TXT, Markdown, HTML, or chapter-by-chapter folders. Claude creates a reusable evidence-based book brief, description variants, keyword sets, and a validation report.
+- Ana Rourke projects can include `project.json` and `sessions/kdp-blurb.md` in the selected chapter folder. Her locked packet template derives the second category and dynamic keyword slots from that metadata while enforcing the required price, KU enrollment, adult flag, AI disclosure, footer, and author bio.
 - KDP royalty XLSX imports with duplicate protection and KENP estimates.
 - Manual/report-based ad tracking for Amazon and Meta with ROI/ACOS calculations.
 - Ad copy generation interface using Claude when configured, or prompt-only fallback when not.

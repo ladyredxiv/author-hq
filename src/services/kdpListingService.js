@@ -1,6 +1,7 @@
 import { generateWithLlm } from './llmClient.js';
 import { escapeHtml, parseJson } from '../utils.js';
 import { adultKdpCategoryWarning, filterAdultKdpCategories } from './kdpCategoryRules.js';
+import { applyKdpPenTemplate } from './kdpPenTemplateService.js';
 
 export async function generateKdpPacket({ penName, genreConfig, book, listing, categoryRows = [], manuscriptBrief = null }) {
   const config = normalizeConfig(genreConfig);
@@ -17,6 +18,13 @@ export async function generateKdpPacket({ penName, genreConfig, book, listing, c
   if (title.length + (subtitle ? subtitle.length + 3 : 0) > 200) warnings.push('KDP title + subtitle limit is 200 characters; shorten before publishing.');
 
   const fallback = fallbackPacket({ penName, config, book, listing, categoryRows, warnings, manuscriptBrief });
+  const templated = applyKdpPenTemplate({ packet: fallback, penName, listing, manuscriptBrief });
+  if (templated) {
+    return {
+      provider: 'pen-template',
+      packet: sanitizePacket(templated)
+    };
+  }
   const prompt = buildPrompt({ penName, config, book, listing, categoryRows, fallback, manuscriptBrief });
   const system = `You are a senior fiction metadata copywriter specializing in ethical, conversion-focused Amazon KDP listings. Write specific copy that communicates reader promise, emotional stakes, subgenre, and differentiating hooks. Return only valid JSON matching the requested schema. Never invent plot facts, tropes, relationship outcomes, awards, reviews, bestseller claims, or named competitor comparisons.`;
 
@@ -75,11 +83,15 @@ export function packetToFlatText(packet) {
     `Price USD: ${packet.price_usd}`,
     `Royalty note: ${packet.royalty_note || ''}`,
     `KDP Select / KU: ${packet.ku_enrolled ? 'Yes' : 'No'}`,
+    `Adult content: ${packet.adult_content ? 'Yes' : 'No'}`,
     `AI generated: ${packet.ai_disclosure?.ai_generated ? 'Yes' : 'No'}`,
     `AI assisted: ${packet.ai_disclosure?.ai_assisted ? 'Yes' : 'No'}`,
     `Language: ${packet.language || 'English'}`,
     `Reading age: ${packet.reading_age || '18+'}`,
     `Publication rights: ${packet.publication_rights || ''}`,
+    '',
+    'Author bio:',
+    packet.author_bio || '',
     '',
     'Warnings:',
     ...(packet.warnings || []).map((warning) => `- ${warning}`),

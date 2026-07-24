@@ -3872,11 +3872,15 @@ async function runManuscriptAnalysisJob({ analysisId, book, extract }) {
   });
   const brief = {
     ...result.brief,
+    ...(extracted.projectMetadata ? { project_metadata: extracted.projectMetadata } : {}),
+    ...(extracted.kdpBlurb ? { kdp_blurb: extracted.kdpBlurb } : {}),
     analysis_meta: {
       chunks_analyzed: result.chunksAnalyzed,
       coverage: result.coverage,
       extracted_word_count: extracted.wordCount,
-      chapter_count: extracted.chapterCount || 1
+      chapter_count: extracted.chapterCount || 1,
+      project_metadata_detected: Boolean(extracted.projectMetadata),
+      kdp_blurb_detected: Boolean(extracted.kdpBlurb)
     }
   };
   sqlite.prepare(`
@@ -5408,7 +5412,7 @@ function manuscriptFolderForm() {
     <div class="field"><label>Book</label><select name="bookId" required><option value="">Choose a book</option>${options(allBooks(), '', { value: 'id', label: 'title' })}</select></div>
     <div class="field"><label>Chapter Folder</label><input type="file" name="chapters" webkitdirectory directory multiple required></div>
     <label class="check-inline"><input type="checkbox" name="force" value="1"> Reanalyze even if these chapters are unchanged</label>
-    <p class="tiny">Readable chapter files are naturally sorted by filename. Unsupported files are ignored. A novel uses several Claude calls and API credits.</p>
+    <p class="tiny">Readable chapter files are naturally sorted by filename. For Ana Rourke projects, Author HQ also detects project.json and sessions/kdp-blurb.md without treating them as manuscript chapters. A manuscript uses several Claude calls and API credits.</p>
     <button data-analysis-submit>Analyze Chapter Folder</button>
   </form>${analysisSubmitScript()}`;
 }
@@ -5449,6 +5453,10 @@ function manuscriptAnalysisView(row) {
   return `<section class="card">
     <div class="section-title-row"><div><h2>${escapeHtml(row.book_title)} Manuscript Brief</h2><p class="muted">${Number(row.word_count || 0).toLocaleString()} extracted words &middot; ${Number(row.chapter_count || 1).toLocaleString()} ${Number(row.chapter_count || 1) === 1 ? 'file' : 'chapter files'} &middot; ${escapeHtml(brief.analysis_meta?.coverage || '')}</p></div><div class="action-row"><a class="button" href="/kdp-listings?bookId=${escapeHtml(row.book_id)}">Generate Packet</a><a class="button secondary" href="/kdp-listings">Back</a></div></div>
     ${warnings.length ? `<div class="notice">${warnings.map((warning) => escapeHtml(warning)).join('<br>')}</div>` : ''}
+    ${brief.analysis_meta?.project_metadata_detected || brief.analysis_meta?.kdp_blurb_detected ? `<div class="notice good">Project support files detected: ${[
+      brief.analysis_meta?.project_metadata_detected ? 'project.json' : '',
+      brief.analysis_meta?.kdp_blurb_detected ? 'sessions/kdp-blurb.md' : ''
+    ].filter(Boolean).map(escapeHtml).join(' and ')}.</div>` : ''}
     <p>${escapeHtml(brief.summary || '')}</p>
     ${manuscriptConfidenceGrid(brief)}
   </section>
@@ -5630,10 +5638,12 @@ function kdpPacketView(row, packet) {
     ${(packet.keyword_sets || []).map((set, index) => copyField(`Keyword Set - ${set.label || `Option ${index + 1}`}`, `${(set.keywords || []).map((keyword, keywordIndex) => `${keywordIndex + 1}. ${keyword}`).join('\n')}\n\n${set.rationale || ''}`, 'span-6')).join('')}
     ${copyField('Suggested Categories', (packet.categories_suggested || []).map((category, index) => `${index + 1}. ${category.path} [${category.rating || 'Unrated'}]\n${category.rationale || ''}`).join('\n\n'), 'span-6')}
     ${copyField('Category Strategy', categoryStrategyText(packet.category_strategy), 'span-12')}
+    ${packet.author_bio ? copyField('Author Bio', packet.author_bio, 'span-6') : ''}
     ${copyField('Pricing / KU / AI Disclosure', [
       `Price: $${packet.price_usd}`,
       packet.royalty_note || '',
       `KDP Select / KU: ${packet.ku_enrolled ? 'Yes' : 'No'}`,
+      `Adult content: ${packet.adult_content ? 'Yes' : 'No'}`,
       `AI generated: ${packet.ai_disclosure?.ai_generated ? 'Yes' : 'No'}`,
       `AI assisted: ${packet.ai_disclosure?.ai_assisted ? 'Yes' : 'No'}`
     ].join('\n'), 'span-6')}
