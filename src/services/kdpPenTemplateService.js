@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { escapeHtml } from '../utils.js';
 
-export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptBrief = null }) {
+export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptBrief = null, preserveGeneratedCopy = false }) {
   const template = kdpPenTemplateFor(penName);
   if (!template) return null;
 
@@ -25,17 +25,19 @@ export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptB
     {
       path: template.categories.fixed,
       rating: 'Unrated',
-      rationale: 'Required primary Ana Rourke erotica category.'
+      rationale: 'Required primary Ana Rourke Romance category.'
     },
     {
       path: categoryTwo,
       rating: 'Unrated',
       rationale: categoryTwo === template.categories.dark
-        ? 'Dark erotica shelf selected from the project heat and trope metadata.'
-        : 'Romantic erotica shelf selected from the project heat and trope metadata.'
+        ? 'Dark Romance shelf selected from the project heat and trope metadata.'
+        : 'Alpha Male Romance shelf selected for the standard Ana Rourke reader promise.'
     }
   ];
-  const sourceBlurb = String(manuscriptBrief?.kdp_blurb || listing.blurbDraft || '').trim();
+  const sourceBlurb = preserveGeneratedCopy
+    ? ''
+    : String(manuscriptBrief?.kdp_blurb || listing.blurbDraft || '').trim();
   const description = appendDescriptionFooter(
     sourceBlurb ? plainTextToKdpHtml(sourceBlurb) : packet.description_html,
     template.descriptionFooter
@@ -52,9 +54,9 @@ export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptB
     ...packet,
     template_key: 'ana-rourke',
     format: template.format || 'ebook',
-    title: String(project.title || packet.title || listing.title || 'Untitled Book'),
+    title: String(project.title || listing.title || packet.title || 'Untitled Book'),
     description_html: description,
-    description_options: [],
+    description_options: preserveGeneratedCopy ? packet.description_options || [] : [],
     keywords,
     keyword_sets: [{
       label: 'Ana Rourke required slots',
@@ -64,12 +66,12 @@ export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptB
     keyword_notes: 'Fields 1, 3, 4, 5, and 7 are fixed. Field 2 follows trope priority; field 6 uses the primary kink profile.',
     categories_suggested: categories,
     category_strategy: {
-      summary: 'Use the fixed Erotica shelf plus the Romantic or Dark subcategory selected from project.json.',
+      summary: 'Use Romance > Contemporary first, then Alpha Male or Dark Romance based on the project metadata.',
       no_ads_plan: [
         'Keep all seven keyword fields aligned to the short, explicit M/F reader promise.',
         'Use KDP Select and consistent weekly catalog releases as the discovery engine.'
       ],
-      avoid: 'Do not use youth-facing categories, anatomical keyword language, competitor names, or unrelated low-competition shelves.',
+      avoid: 'Do not deliberately select Erotica or youth-facing categories, anatomical keyword language, competitor names, or unrelated low-competition shelves.',
       manual_review: 'Verify both category paths in the live KDP picker before publishing.'
     },
     price_usd: Number(template.priceUsd),
@@ -106,8 +108,7 @@ function anaCategoryTwo(template, project, tropes) {
   const heat = String(project.heatLevel || project.heat_level || '').trim().toLowerCase();
   const darkTrigger = truthy(project.cncPresent ?? project.cnc_present) ||
     tropes.some((trope) => ['dark-romance', 'dark romance'].includes(trope));
-  if (heat === 'dark') return template.categories.dark;
-  if (heat === 'all' && darkTrigger) return template.categories.dark;
+  if (heat === 'dark' || darkTrigger) return template.categories.dark;
   return template.categories.romantic;
 }
 

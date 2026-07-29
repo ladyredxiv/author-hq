@@ -1,7 +1,7 @@
 import { generateWithLlm } from './llmClient.js';
 import { escapeHtml, parseJson } from '../utils.js';
 import { adultKdpCategoryWarning, filterAdultKdpCategories } from './kdpCategoryRules.js';
-import { applyKdpPenTemplate } from './kdpPenTemplateService.js';
+import { applyKdpPenTemplate, kdpPenTemplateFor } from './kdpPenTemplateService.js';
 
 export async function generateKdpPacket({ penName, genreConfig, book, listing, categoryRows = [], manuscriptBrief = null }) {
   const config = normalizeConfig(genreConfig);
@@ -18,30 +18,30 @@ export async function generateKdpPacket({ penName, genreConfig, book, listing, c
   if (title.length + (subtitle ? subtitle.length + 3 : 0) > 200) warnings.push('KDP title + subtitle limit is 200 characters; shorten before publishing.');
 
   const fallback = fallbackPacket({ penName, config, book, listing, categoryRows, warnings, manuscriptBrief });
-  const templated = applyKdpPenTemplate({ packet: fallback, penName, listing, manuscriptBrief });
-  if (templated) {
-    return {
-      provider: 'pen-template',
-      packet: sanitizePacket(templated)
-    };
-  }
-  const prompt = buildPrompt({ penName, config, book, listing, categoryRows, fallback, manuscriptBrief });
+  const penTemplate = kdpPenTemplateFor(penName);
+  const templatedFallback = applyKdpPenTemplate({ packet: fallback, penName, listing, manuscriptBrief });
+  const baseline = sanitizePacket(templatedFallback || fallback);
+  const prompt = buildPrompt({ penName, config, book, listing, categoryRows, fallback: baseline, manuscriptBrief, penTemplate });
   const system = `You are a senior fiction metadata copywriter specializing in ethical, conversion-focused Amazon KDP listings. Write specific copy that communicates reader promise, emotional stakes, subgenre, and differentiating hooks. Return only valid JSON matching the requested schema. Never invent plot facts, tropes, relationship outcomes, awards, reviews, bestseller claims, or named competitor comparisons.`;
 
   try {
     const result = await generateWithLlm({ system, prompt, maxTokens: 3600, timeoutMs: 90000 });
-    if (result.provider !== 'claude') return { provider: result.provider, packet: fallback, prompt: result.text };
+    if (!isLlmProvider(result.provider)) return { provider: result.provider, packet: baseline, prompt: result.text };
     const parsed = parsePacketJson(result.text);
-    const candidate = sanitizePacket({ ...fallback, ...parsed, warnings: mergeWarnings(warnings, parsed?.warnings) });
+    const candidate = sanitizePacket({ ...baseline, ...parsed, warnings: mergeWarnings(baseline.warnings, parsed?.warnings) });
     const validated = await validateAndOptimizePacket({ candidate, manuscriptBrief, penName, listing });
+    const generated = sanitizePacket(validated || candidate);
+    const locked = penTemplate
+      ? applyKdpPenTemplate({ packet: generated, penName, listing, manuscriptBrief, preserveGeneratedCopy: true })
+      : generated;
     return {
       provider: result.provider,
-      packet: sanitizePacket(validated || candidate)
+      packet: sanitizePacket(locked)
     };
   } catch (error) {
     return {
       provider: 'fallback',
-      packet: { ...fallback, warnings: mergeWarnings(warnings, [`Claude generation failed: ${error.message}`]) }
+      packet: { ...baseline, warnings: mergeWarnings(baseline.warnings, [`Claude generation failed: ${error.message}`]) }
     };
   }
 }
@@ -155,7 +155,10 @@ function fallbackPacket({ penName, config, book, listing, categoryRows, warnings
   });
 }
 
-function buildPrompt({ penName, config, book, listing, categoryRows, fallback, manuscriptBrief }) {
+function buildPrompt({ penName, config, book, listing, categoryRows, fallback, manuscriptBrief, penTemplate = null }) {
+  const templateRules = penTemplate
+    ? `A pen-name template is active. Treat these values in the fallback packet as immutable: format, title, keywords, keyword_sets, keyword_notes, categories_suggested, price_usd, royalty_note, ku_enrolled, adult_content, ai_disclosure, reading_age, author_bio, and the adult-content footer at the end of description_html. You must still create and improve description_html, all 3 description_options, category_strategy, and marketing_validation. Preserve every locked value exactly and do not skip the creative generation work.`
+    : 'No pen-name-specific locked template is active.';
   return `Generate a KDP listing packet as JSON only.
 
 Required JSON fields:
@@ -171,6 +174,7 @@ Rules:
 - categories_suggested must NOT include YA, Young Adult, Teen, Middle Grade, Juvenile, or Children's categories. Use adult-facing shelves only.
 - category_strategy: object with summary and no_ads_plan array. Treat fortress categories as honest reader-fit shelves, not as a failure. Do not recommend misleading categories just because they are easier. Explain how keywords, description positioning, cover promise, KU/series behavior, newsletter/website/social traffic should support discoverability when categories are fortress.
 - warnings must include review-before-use and AI disclosure confirmation.
+- ${templateRules}
 
 Pen name: ${penName?.display_name || 'Unassigned'}
 Pen brand: ${JSON.stringify(parseJson(penName?.brand_details, {}))}
@@ -213,11 +217,15 @@ Manuscript brief: ${JSON.stringify(manuscriptBrief || { available: false })}
 Candidate packet: ${JSON.stringify(candidate)}`;
   try {
     const result = await generateWithLlm({ system, prompt, maxTokens: 4000, timeoutMs: 90000 });
-    if (result.provider !== 'claude') return candidate;
+    if (!isLlmProvider(result.provider)) return candidate;
     return parsePacketJson(result.text) || candidate;
   } catch (error) {
     return { ...candidate, warnings: mergeWarnings(candidate.warnings, [`Marketing validation pass failed: ${error.message}`]) };
   }
+}
+
+function isLlmProvider(provider) {
+  return provider === 'claude' || provider === 'openrouter';
 }
 
 function normalizeConfig(row) {

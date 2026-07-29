@@ -620,6 +620,22 @@ function migrateColumns() {
   ensure('calendar_events', 'external_id', 'external_id TEXT');
   ensure('calendar_events', 'external_updated', 'external_updated TEXT');
   sqlite.exec('CREATE INDEX IF NOT EXISTS calendar_events_external_idx ON calendar_events(external_source, external_id)');
+
+  const anaRomanceCategories = [
+    { path: 'Romance > Contemporary', rating: 'Fortress', notes: 'Required Romance-first primary category for every Ana Rourke title.' },
+    { path: 'Romance > Alpha Male', rating: 'Fortress', notes: 'Use for standard Ana Rourke projects.' },
+    { path: 'Romance > Dark Romance', rating: 'Fortress', notes: 'Use for dark heat or CNC/dark-romance metadata.' }
+  ];
+  sqlite.prepare(`
+    UPDATE kdp_genre_configs
+    SET verified_categories = ?,
+      category_strategy_notes = ?
+    WHERE pen_name_id = (SELECT id FROM pen_names WHERE key = 'ana-rourke')
+      AND lower(COALESCE(verified_categories, '')) LIKE '%literature & fiction > erotica%'
+  `).run(
+    JSON.stringify(anaRomanceCategories),
+    'Ana Rourke uses a Romance-first two-category template. Category 2 is derived from project.json heatLevel, cncPresent, and tropes. Do not deliberately select Erotica categories.'
+  );
 }
 
 function seedBrainRoots() {
@@ -825,12 +841,12 @@ function seedKdpGenreConfigs() {
       coreTropes: ['dark romance', 'enemies to lovers', 'instalove', 'strangers', 'forbidden romance'],
       targetAudience: 'Adult 18+ erotica-short readers who want explicit heat without a long wait.',
       verifiedCategories: [
-        { path: 'Kindle Store > Kindle eBooks > Literature & Fiction > Erotica', rating: 'Fortress', notes: 'Required primary category for every Ana Rourke title.' },
-        { path: 'Kindle Store > Kindle eBooks > Literature & Fiction > Erotica > Romantic', rating: 'Fortress', notes: 'Use for explicit and non-dark projects.' },
-        { path: 'Kindle Store > Kindle eBooks > Literature & Fiction > Erotica > Dark', rating: 'Fortress', notes: 'Use for dark heat or CNC/dark-romance metadata.' }
+        { path: 'Romance > Contemporary', rating: 'Fortress', notes: 'Required Romance-first primary category for every Ana Rourke title.' },
+        { path: 'Romance > Alpha Male', rating: 'Fortress', notes: 'Use for standard Ana Rourke projects.' },
+        { path: 'Romance > Dark Romance', rating: 'Fortress', notes: 'Use for dark heat or CNC/dark-romance metadata.' }
       ],
       keywordStarterList: ['M/F erotica short story', 'steamy short read adult', 'forbidden romance explicit', 'alpha male erotica', 'kindle unlimited erotica'],
-      categoryStrategyNotes: 'Ana Rourke uses a locked two-category template. Category 2 is derived from project.json heatLevel, cncPresent, and tropes.',
+      categoryStrategyNotes: 'Ana Rourke uses a Romance-first two-category template. Category 2 is derived from project.json heatLevel, cncPresent, and tropes. Do not deliberately select Erotica categories.',
       defaultPriceUsd: 2.99,
       defaultKuEnrolled: 1,
       aiGeneratedDefault: 1,
