@@ -16,12 +16,32 @@ const basePacket = {
 test('loads the Ana Rourke packet template by pen key', () => {
   const template = kdpPenTemplateFor({ key: 'ana-rourke', display_name: 'Ana Rourke' });
   assert.equal(template.priceUsd, 2.99);
-  assert.equal(template.kinkKeywordRules.length, 7);
+  assert.equal(template.categoryPolicy.count, 3);
+  assert.equal(template.fixedKeywords, undefined);
 });
 
-test('locks Ana packet fields and derives dark category and priority keywords from project metadata', () => {
+test('locks Ana operational fields while preserving creative keywords and three Romance-first categories', () => {
+  const creativeKeywords = [
+    'obsessive CEO office romance',
+    'forbidden workplace power dynamic',
+    'morally gray billionaire romance',
+    'assistant boss steamy short read',
+    'possessive hero corporate romance',
+    'high heat enemies to lovers',
+    'dangerous contract romance'
+  ];
   const packet = applyKdpPenTemplate({
-    packet: basePacket,
+    packet: {
+      ...basePacket,
+      keywords: creativeKeywords,
+      keyword_sets: [{ label: 'Primary', keywords: creativeKeywords, rationale: 'Book-specific terms' }],
+      keyword_notes: 'Book-specific Claude strategy.',
+      categories_suggested: [
+        { path: 'Mystery, Thriller & Suspense > Psychological', rating: 'Competitive', rationale: 'Tension crossover' },
+        { path: 'Romance > Workplace Romance', rating: 'Fortress', rationale: 'Primary reader fit' },
+        { path: 'Literature & Fiction > Erotica', rating: 'Fortress', rationale: 'Must be removed' }
+      ]
+    },
     penName: { key: 'ana-rourke', display_name: 'Ana Rourke' },
     manuscriptBrief: {
       project_metadata: {
@@ -41,19 +61,25 @@ test('locks Ana packet fields and derives dark category and priority keywords fr
   assert.equal(packet.adult_content, true);
   assert.equal(packet.ai_disclosure.ai_generated, true);
   assert.equal(packet.keywords.length, 7);
-  assert.equal(packet.keywords[0], 'M/F erotica short story');
-  assert.equal(packet.keywords[1], 'dark romance erotica');
-  assert.equal(packet.keywords[5], 'forbidden boss romance steamy');
-  assert.equal(packet.categories_suggested[0].path, 'Romance > Contemporary');
-  assert.equal(packet.categories_suggested[1].path, 'Romance > Dark Romance');
+  assert.deepEqual(packet.keywords, creativeKeywords);
+  assert.equal(packet.keyword_sets[0].label, 'Primary');
+  assert.equal(packet.categories_suggested.length, 3);
+  assert.equal(packet.categories_suggested[0].path, 'Romance > Workplace Romance');
+  assert.equal(packet.categories_suggested[1].path, 'Mystery, Thriller & Suspense > Psychological');
+  assert.equal(packet.categories_suggested[2].path, 'Romance > Contemporary');
+  assert.equal(packet.categories_suggested.some((category) => category.path.includes('Erotica')), false);
   assert.match(packet.description_html, /She made one dangerous bargain/);
   assert.match(packet.description_html, /adult readers 18\+/);
   assert.match(packet.author_bio, /heat without the wait/);
 });
 
-test('uses Romantic and safe fallback keywords when Ana metadata has no dark or mapped profile', () => {
+test('fills missing Ana categories without replacing Claude keywords', () => {
   const packet = applyKdpPenTemplate({
-    packet: basePacket,
+    packet: {
+      ...basePacket,
+      keywords: ['specific forced proximity romance'],
+      categories_suggested: [{ path: 'Romance > Workplace Romance', rating: 'Fortress', rationale: 'Book fit' }]
+    },
     penName: { display_name: 'Ana Rourke' },
     manuscriptBrief: {
       project_metadata: {
@@ -64,10 +90,9 @@ test('uses Romantic and safe fallback keywords when Ana metadata has no dark or 
     }
   });
 
-  assert.equal(packet.categories_suggested[0].path, 'Romance > Contemporary');
-  assert.equal(packet.categories_suggested[1].path, 'Romance > Alpha Male');
-  assert.equal(packet.keywords[1], 'steamy M/F erotica romance');
-  assert.equal(packet.keywords[5], 'steamy adult romance explicit');
+  assert.equal(packet.categories_suggested.length, 3);
+  assert.equal(packet.categories_suggested[0].path, 'Romance > Workplace Romance');
+  assert.equal(packet.keywords[0], 'specific forced proximity romance');
 });
 
 test('does not apply Ana rules to another pen name', () => {
@@ -93,8 +118,25 @@ test('Ana template constrains a Claude-generated packet instead of bypassing the
       { approach: 'high-concept', description_html: 'Concept option', rationale: 'Hook' },
       { approach: 'trope-forward', description_html: 'Trope option', rationale: 'Reader promise' }
     ],
-    keywords: ['wrong keyword'],
-    categories_suggested: [{ path: 'Kindle Store > Children', rating: 'Easy', rationale: 'Wrong' }],
+    keywords: [
+      'obsessive CEO office romance',
+      'forbidden workplace power dynamic',
+      'morally gray billionaire romance',
+      'assistant boss steamy short read',
+      'possessive hero corporate romance',
+      'high heat enemies to lovers',
+      'dangerous contract romance'
+    ],
+    keyword_sets: [{
+      label: 'Primary',
+      keywords: ['obsessive CEO office romance'],
+      rationale: 'Specific to this book'
+    }],
+    keyword_notes: 'Targets the book-specific workplace and power dynamic.',
+    categories_suggested: [
+      { path: 'Business & Money > Management & Leadership', rating: 'Competitive', rationale: 'Corporate crossover' },
+      { path: 'Romance > Workplace Romance', rating: 'Fortress', rationale: 'Primary reader fit' }
+    ],
     price_usd: 9.99,
     category_strategy: { summary: 'Generated strategy', no_ads_plan: ['Generated action'] },
     marketing_validation: { status: 'Claude reviewed' },
@@ -130,9 +172,12 @@ test('Ana template constrains a Claude-generated packet instead of bypassing the
     assert.equal(result.provider, 'openrouter');
     assert.equal(result.packet.title, 'A Dangerous Arrangement');
     assert.equal(result.packet.price_usd, 2.99);
-    assert.equal(result.packet.keywords[0], 'M/F erotica short story');
-    assert.equal(result.packet.categories_suggested[0].path, 'Romance > Contemporary');
-    assert.equal(result.packet.categories_suggested[1].path, 'Romance > Dark Romance');
+    assert.equal(result.packet.keywords[0], 'obsessive CEO office romance');
+    assert.equal(result.packet.keywords.length, 7);
+    assert.equal(result.packet.categories_suggested.length, 3);
+    assert.equal(result.packet.categories_suggested[0].path, 'Romance > Workplace Romance');
+    assert.equal(result.packet.categories_suggested[1].path, 'Business & Money > Management & Leadership');
+    assert.equal(result.packet.categories_suggested[2].path, 'Romance > Contemporary');
     assert.equal(result.packet.description_options.length, 3);
     assert.match(result.packet.description_html, /A sharper Claude hook/);
     assert.match(result.packet.description_html, /adult readers 18\+/);

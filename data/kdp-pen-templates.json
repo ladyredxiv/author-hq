@@ -10,67 +10,16 @@
     "readingAge": "18+",
     "authorBio": "Ana Rourke writes M/F erotica shorts for readers who want the heat without the wait.\nHer women keep their power. Her men are worth the trouble. New titles every week.",
     "descriptionFooter": "This title contains explicit sexual content intended for adult readers 18+.",
-    "categories": {
-      "fixed": "Romance > Contemporary",
-      "romantic": "Romance > Alpha Male",
-      "dark": "Romance > Dark Romance"
-    },
-    "fixedKeywords": {
-      "1": "M/F erotica short story",
-      "3": "steamy short read adult",
-      "4": "forbidden romance explicit",
-      "5": "alpha male erotica",
-      "7": "kindle unlimited erotica"
-    },
-    "tropeKeywordRules": [
-      {
-        "matches": ["dark-romance", "dark romance"],
-        "keyword": "dark romance erotica"
-      },
-      {
-        "matches": ["enemies-to-lovers", "enemies to lovers"],
-        "keyword": "enemies to lovers erotica"
-      },
-      {
-        "matches": ["instalove", "fated mates"],
-        "keyword": "instalove fated mates erotica"
-      },
-      {
-        "matches": ["strangers", "one night"],
-        "keyword": "one night stand erotica steamy"
-      }
-    ],
-    "defaultTropeKeyword": "steamy M/F erotica romance",
-    "kinkKeywordRules": [
-      {
-        "matches": ["bdsm", "power exchange"],
-        "keyword": "power exchange romance adult"
-      },
-      {
-        "matches": ["dominant/submissive", "dominant submissive", "d/s dynamic", "dom/sub"],
-        "keyword": "dominant alpha romance steamy"
-      },
-      {
-        "matches": ["cnc", "consensual non-consent"],
-        "keyword": "dark forbidden romance explicit"
-      },
-      {
-        "matches": ["boss", "authority figure"],
-        "keyword": "forbidden boss romance steamy"
-      },
-      {
-        "matches": ["villain", "morally grey", "morally gray"],
-        "keyword": "dark villain romance erotica"
-      },
-      {
-        "matches": ["age gap"],
-        "keyword": "age gap romance explicit adult"
-      },
-      {
-        "matches": ["strangers", "one night"],
-        "keyword": "steamy stranger romance adult"
-      }
-    ],
-    "defaultKinkKeyword": "steamy adult romance explicit"
+    "categoryPolicy": {
+      "count": 3,
+      "primaryFamily": "Romance",
+      "disallowedTerms": ["Erotica"],
+      "fallbacks": [
+        "Romance > Contemporary",
+        "Romance > Alpha Male",
+        "Literature & Fiction > Contemporary Fiction > Contemporary > Romance",
+        "Romance > Dark Romance"
+      ]
+    }
   }
 }

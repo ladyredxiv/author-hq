@@ -157,7 +157,7 @@ function fallbackPacket({ penName, config, book, listing, categoryRows, warnings
 
 function buildPrompt({ penName, config, book, listing, categoryRows, fallback, manuscriptBrief, penTemplate = null }) {
   const templateRules = penTemplate
-    ? `A pen-name template is active. Treat these values in the fallback packet as immutable: format, title, keywords, keyword_sets, keyword_notes, categories_suggested, price_usd, royalty_note, ku_enrolled, adult_content, ai_disclosure, reading_age, author_bio, and the adult-content footer at the end of description_html. You must still create and improve description_html, all 3 description_options, category_strategy, and marketing_validation. Preserve every locked value exactly and do not skip the creative generation work.`
+    ? `A pen-name template is active. Treat these operational values in the fallback packet as immutable: format, title, price_usd, royalty_note, ku_enrolled, adult_content, ai_disclosure, reading_age, author_bio, and the adult-content footer at the end of description_html. Generate the creative metadata exactly as you would for any other pen name: seven highly specific, book-dependent keyword phrases with no fixed evergreen slots, three book-dependent categories, all three description options, category_strategy, and marketing_validation. The first category must be in the Romance family. Do not deliberately select any category containing "Erotica." Do not reuse generic template keywords when the supplied book details support more precise search language.`
     : 'No pen-name-specific locked template is active.';
   return `Generate a KDP listing packet as JSON only.
 

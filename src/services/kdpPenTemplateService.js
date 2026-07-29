@@ -8,33 +8,7 @@ export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptB
 
   const project = manuscriptBrief?.project_metadata || {};
   const tropes = normalizedList(project.tropes || manuscriptBrief?.tropes);
-  const kinkProfile = normalizedList(project.kinkProfile || project.kink_profile);
-  const tropeKeyword = keywordFromRules(tropes, template.tropeKeywordRules, template.defaultTropeKeyword);
-  const kinkKeyword = keywordFromRules(kinkProfile.slice(0, 1), template.kinkKeywordRules, template.defaultKinkKeyword);
-  const keywords = [
-    template.fixedKeywords?.['1'],
-    tropeKeyword,
-    template.fixedKeywords?.['3'],
-    template.fixedKeywords?.['4'],
-    template.fixedKeywords?.['5'],
-    kinkKeyword,
-    template.fixedKeywords?.['7']
-  ].map((value) => String(value || '').slice(0, 50));
-  const categoryTwo = anaCategoryTwo(template, project, tropes);
-  const categories = [
-    {
-      path: template.categories.fixed,
-      rating: 'Unrated',
-      rationale: 'Required primary Ana Rourke Romance category.'
-    },
-    {
-      path: categoryTwo,
-      rating: 'Unrated',
-      rationale: categoryTwo === template.categories.dark
-        ? 'Dark Romance shelf selected from the project heat and trope metadata.'
-        : 'Alpha Male Romance shelf selected for the standard Ana Rourke reader promise.'
-    }
-  ];
+  const categories = enforceCategoryPolicy(packet.categories_suggested, template.categoryPolicy, project, tropes);
   const sourceBlurb = preserveGeneratedCopy
     ? ''
     : String(manuscriptBrief?.kdp_blurb || listing.blurbDraft || '').trim();
@@ -56,24 +30,12 @@ export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptB
     format: template.format || 'ebook',
     title: String(project.title || listing.title || packet.title || 'Untitled Book'),
     description_html: description,
-    description_options: preserveGeneratedCopy ? packet.description_options || [] : [],
-    keywords,
-    keyword_sets: [{
-      label: 'Ana Rourke required slots',
-      keywords,
-      rationale: 'Evergreen slots are fixed; trope and kink slots come from project.json.'
-    }],
-    keyword_notes: 'Fields 1, 3, 4, 5, and 7 are fixed. Field 2 follows trope priority; field 6 uses the primary kink profile.',
+    description_options: packet.description_options || [],
+    keywords: packet.keywords || [],
+    keyword_sets: packet.keyword_sets || [],
+    keyword_notes: packet.keyword_notes || '',
     categories_suggested: categories,
-    category_strategy: {
-      summary: 'Use Romance > Contemporary first, then Alpha Male or Dark Romance based on the project metadata.',
-      no_ads_plan: [
-        'Keep all seven keyword fields aligned to the short, explicit M/F reader promise.',
-        'Use KDP Select and consistent weekly catalog releases as the discovery engine.'
-      ],
-      avoid: 'Do not deliberately select Erotica or youth-facing categories, anatomical keyword language, competitor names, or unrelated low-competition shelves.',
-      manual_review: 'Verify both category paths in the live KDP picker before publishing.'
-    },
+    category_strategy: packet.category_strategy || {},
     price_usd: Number(template.priceUsd),
     royalty_note: '$2.99 is within the 70% ebook royalty band. Do not launch below $2.99 or above $3.99 for this short-fiction template.',
     ku_enrolled: Boolean(template.kuEnrolled),
@@ -90,7 +52,8 @@ export function applyKdpPenTemplate({ packet, penName, listing = {}, manuscriptB
       template: 'Ana Rourke',
       project_metadata_used: Boolean(manuscriptBrief?.project_metadata),
       supplied_blurb_used: Boolean(manuscriptBrief?.kdp_blurb),
-      fixed_fields_locked: true
+      operational_defaults_applied: true,
+      creative_metadata_generated_by_claude: true
     }
   };
 }
@@ -104,22 +67,42 @@ export function kdpPenTemplateFor(penName) {
   return loadTemplates()[key] || null;
 }
 
-function anaCategoryTwo(template, project, tropes) {
-  const heat = String(project.heatLevel || project.heat_level || '').trim().toLowerCase();
-  const darkTrigger = truthy(project.cncPresent ?? project.cnc_present) ||
-    tropes.some((trope) => ['dark-romance', 'dark romance'].includes(trope));
-  if (heat === 'dark' || darkTrigger) return template.categories.dark;
-  return template.categories.romantic;
-}
+function enforceCategoryPolicy(categories, policy = {}, project = {}, tropes = []) {
+  const disallowed = normalizedList(policy.disallowedTerms);
+  const desiredCount = Number(policy.count || 3);
+  const primaryFamily = String(policy.primaryFamily || 'Romance').toLowerCase();
+  const generated = (Array.isArray(categories) ? categories : [])
+    .map((category) => typeof category === 'string' ? { path: category } : { ...category })
+    .filter((category) => category.path && !disallowed.some((term) => String(category.path).toLowerCase().includes(term)));
+  const primaryIndex = generated.findIndex((category) => String(category.path).toLowerCase().startsWith(`${primaryFamily} >`));
+  if (primaryIndex > 0) generated.unshift(generated.splice(primaryIndex, 1)[0]);
 
-function keywordFromRules(values, rules = [], fallback = '') {
-  for (const rule of rules) {
-    const matches = normalizedList(rule.matches);
-    if (values.some((value) => matches.some((match) => value === match || value.includes(match)))) {
-      return rule.keyword;
+  const darkProject = truthy(project.cncPresent ?? project.cnc_present) ||
+    String(project.heatLevel || project.heat_level || '').trim().toLowerCase() === 'dark' ||
+    tropes.some((trope) => ['dark-romance', 'dark romance'].includes(trope));
+  const fallbacks = [...(policy.fallbacks || [])];
+  if (darkProject) {
+    const darkIndex = fallbacks.findIndex((path) => String(path).toLowerCase().includes('dark romance'));
+    if (darkIndex > 0) fallbacks.splice(1, 0, fallbacks.splice(darkIndex, 1)[0]);
+  }
+  if (primaryIndex < 0 && fallbacks.length) {
+    generated.unshift({
+      path: fallbacks[0],
+      rating: 'Unrated',
+      rationale: 'Romance-first fallback; verify the live KDP category picker.'
+    });
+  }
+  for (const path of fallbacks) {
+    if (generated.length >= desiredCount) break;
+    if (!generated.some((category) => String(category.path).toLowerCase() === String(path).toLowerCase())) {
+      generated.push({
+        path,
+        rating: 'Unrated',
+        rationale: 'Fallback used because Claude returned fewer than three category suggestions; verify before publishing.'
+      });
     }
   }
-  return fallback;
+  return generated.slice(0, desiredCount);
 }
 
 function normalizedList(value) {
