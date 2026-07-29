@@ -31,7 +31,12 @@ try {
   await expectPage(handle.url, '/newsletter', `<a href="${newsletterLocation}"><strong>Smoke Newsletter Room</strong></a>`);
   await expectPage(handle.url, newsletterLocation, 'Smoke Newsletter Room');
   await expectPage(handle.url, newsletterLocation, 'Claude is thinking...');
-  const newsletterDraftSave = await fetch(`${handle.url}${newsletterLocation}/draft`, { method: 'POST', redirect: 'manual' });
+  await expectPage(handle.url, newsletterLocation, 'No book promotion');
+  const newsletterDraftSave = await fetch(`${handle.url}${newsletterLocation}/draft`, {
+    method: 'POST',
+    body: new URLSearchParams({ featuredBookChoice: 'none' }),
+    redirect: 'manual'
+  });
   if (newsletterDraftSave.status !== 302) throw new Error(`Newsletter draft shaping returned ${newsletterDraftSave.status}.`);
   await expectPage(handle.url, newsletterLocation, 'Live preview');
   await expectPage(handle.url, newsletterLocation, 'data-preview-size="mobile"');

@@ -2,7 +2,6 @@ import { generateWithLlm } from './llmClient.js';
 import { escapeHtml, parseJson } from '../utils.js';
 
 const selenaAmazonUrl = 'https://www.amazon.com/stores/Selena-Monroe/author/B0H2GBB7Z4';
-const selenaHeroUrl = 'https://lh3.googleusercontent.com/d/17q41lvThGW56VUTwG7eV4vAqS1m34bqA';
 
 export async function chatNewsletterProject({ penName, topic, messages = [], books = [], upcomingEvents = [] }) {
   const brand = parseJson(penName?.brand_details, {});
@@ -33,32 +32,47 @@ ${events}`;
   });
 }
 
-export async function draftNewsletter({ penName, topic, notes, books = [] }) {
+export async function draftNewsletter({ penName, topic, notes, books = [], featuredBook = null, promotionMode = 'auto' }) {
   const penId = penName?.pen_name_id || penName?.id;
   const relevantBooks = penId ? books.filter((book) => String(book.pen_name_id || '') === String(penId)) : books;
+  const promotionBook = resolveNewsletterFeaturedBook({ books: relevantBooks, featuredBook, promotionMode });
   if (penName?.display_name === 'Selena Monroe') {
-    return draftSelenaNewsletter({ topic, notes, books: relevantBooks });
+    return draftSelenaNewsletter({ topic, notes, books: relevantBooks, featuredBook: promotionBook });
   }
 
   const brand = parseJson(penName?.brand_details, {});
   const system = `Draft author newsletters. Preserve this pen name voice: ${brand.voice || 'clear, intimate, bookish'}.`;
+  const promotionBrief = promotionMode === 'none'
+    ? 'Do not include a book promotion, sales pitch, or book call to action in this newsletter.'
+    : promotionBook
+      ? `Feature only this book in the primary promotional section: ${promotionBook.title} | ${promotionBook.status || 'status not set'} | ${promotionBook.series || 'standalone'} | release ${promotionBook.planned_release || promotionBook.actual_release || 'not set'}. Do not substitute a different title.`
+      : 'No suitable featured book is available. Do not invent a title or promotional section.';
   const prompt = `Pen name: ${penName?.display_name || 'Author'}
 Genre/brand: ${brand.genre || 'author newsletter'}
 Topic: ${topic || 'monthly update'}
 Notes:
 ${notes || 'No notes supplied.'}
 
+Book promotion:
+${promotionBrief}
+
 Return a subject line, preview text, and email body. Keep it useful and paste-ready for EmailOctopus.`;
-  return generateWithLlm({ system, prompt, providerPreference: 'openrouter_first', model: 'anthropic/claude-sonnet-4.6', maxTokens: 2400 });
+  const draft = await generateWithLlm({ system, prompt, providerPreference: 'openrouter_first', model: 'anthropic/claude-sonnet-4.6', maxTokens: 2400 });
+  return {
+    ...draft,
+    html: stripNewsletterImages(draft.html || '')
+  };
 }
 
-async function draftSelenaNewsletter({ topic, notes, books }) {
-  const published = books.filter((book) => book.status === 'Published');
+async function draftSelenaNewsletter({ topic, notes, books, featuredBook }) {
+  const published = books.filter((book) => ['Published', 'Live'].includes(book.status));
   const preorders = books.filter((book) => book.status === 'Pre-order Live');
   const inProgress = books.filter((book) => ['Drafting', 'Draft Complete', 'Editing', 'Editing Complete', 'Formatting', 'Cover Ready', 'Uploaded to KDP'].includes(book.status));
-  const featuredBook = preorders[0] || published.at(-1) || null;
   const month = topic || new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
   const authorNote = notes?.trim() || 'No special note this month.';
+  const promotionBrief = featuredBook
+    ? `Feature only "${featuredBook.title}" (${featuredBook.status || 'status not set'}, ${featuredBook.series || 'standalone'}, release ${featuredBook.planned_release || featuredBook.actual_release || 'not set'}). The promotional copy and button must refer to this title and no other book.`
+    : 'This newsletter has no featured book. Do not write a sales pitch, book CTA, or promotional button copy.';
 
   const system = 'You write short Selena Monroe newsletters in warm, intimate, slightly mysterious sapphic dark romantasy voice.';
   const prompt = `Write a monthly newsletter for Selena Monroe.
@@ -70,6 +84,7 @@ Current publishing status:
 
 Month/topic: ${month}
 Author note: ${authorNote}
+Featured promotion: ${promotionBrief}
 
 Return ONLY JSON with these exact fields:
 {"subject":"Subject line","preheader":"One-line preview text, 40-60 chars","sectionLabel":"From the Author","headline":"Short italic headline, max 8 words","paragraph1":"Opening paragraph","paragraph2":"Second paragraph","buttonText":"Read on Kindle Unlimited","buttonUrl":"${selenaAmazonUrl}","tropeTag1":"First trope tag","tropeTag2":"Second trope tag","tropeTag3":"Third trope tag"}`;
@@ -92,8 +107,8 @@ Return ONLY JSON with these exact fields:
     ...parsed,
     bookCardHtml: featuredBook ? bookCardHtml(featuredBook, books) : '',
     tropeHtml: tropeHtml(parsed),
-    heroUrl: selenaHeroUrl,
-    amazonUrl: selenaAmazonUrl
+    amazonUrl: selenaAmazonUrl,
+    showBookPromotion: Boolean(featuredBook)
   });
 
   return {
@@ -101,7 +116,7 @@ Return ONLY JSON with these exact fields:
     subject: parsed.subject || 'A note from Selena Monroe',
     preview: parsed.preheader || '',
     text,
-    html,
+    html: stripNewsletterImages(html),
     warning: parsed.generationWarning || ''
   };
 }
@@ -156,6 +171,9 @@ function tropeHtml(parsed) {
 function buildSelenaNewsletterHtml(d) {
   const paragraph1 = escapeHtml(d.paragraph1 || '').replaceAll('\n', '<br>');
   const paragraph2 = escapeHtml(d.paragraph2 || '').replaceAll('\n', '<br>');
+  const promotionButton = d.showBookPromotion
+    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="margin:28px auto;"><tr><td style="border:1px solid #7A1F2B;"><a href="${escapeAttr(d.buttonUrl || selenaAmazonUrl)}" class="font-body" style="display:inline-block;padding:13px 36px;font-size:11px;font-weight:400;letter-spacing:0.3em;text-transform:uppercase;color:#f0e8d8;text-decoration:none;background-color:transparent;">${escapeHtml(d.buttonText || 'Read on Kindle Unlimited')}</a></td></tr></table>`
+    : '';
   return '<!DOCTYPE html><html lang="en" xmlns="http://www.w3.org/1999/xhtml"><head>' +
     '<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">' +
     '<meta http-equiv="X-UA-Compatible" content="IE=edge"><title>Selena Monroe</title>' +
@@ -171,13 +189,12 @@ function buildSelenaNewsletterHtml(d) {
     '<td style="padding:0 10px;"><a href="https://selenamonroe.com" class="font-body" style="font-size:10px;font-weight:400;letter-spacing:0.2em;text-transform:uppercase;color:#9a7a5a;text-decoration:none;">About</a></td>' +
     `<td style="padding:0 10px;"><a href="${selenaAmazonUrl}" class="font-body" style="font-size:10px;font-weight:400;letter-spacing:0.2em;text-transform:uppercase;color:#9a7a5a;text-decoration:none;">Amazon</a></td>` +
     '</tr></table></td></tr>' +
-    `<tr><td style="background-color:#1a0e0e;border-bottom:1px solid #1e1414;padding:0;line-height:0;"><a href="${selenaAmazonUrl}"><img src="${d.heroUrl}" alt="Selena Monroe" width="600" style="display:block;width:100%;max-width:600px;height:auto;background-color:#1a0e0e;"></a></td></tr>` +
     '<tr><td class="mobile-pad" style="padding:36px 40px 28px;"><table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:16px;"><tr>' +
     `<td class="font-body" style="font-size:10px;letter-spacing:0.3em;text-transform:uppercase;color:#7A1F2B;white-space:nowrap;padding-right:12px;width:1%;">${escapeHtml(d.sectionLabel || 'From the Author')}</td><td style="border-top:1px solid #1e1414;"></td></tr></table>` +
     `<h2 class="headline-size font-display" style="margin:0 0 20px;font-size:28px;font-weight:300;font-style:italic;color:#f0e8d8;line-height:1.35;letter-spacing:0.02em;">${escapeHtml(d.headline || '')}</h2>` +
     `<p class="font-body" style="margin:0 0 14px;font-size:14px;font-weight:300;color:#c4a882;line-height:1.85;">${paragraph1}</p>` +
     `<p class="font-body" style="margin:0 0 14px;font-size:14px;font-weight:300;color:#c4a882;line-height:1.85;">${paragraph2}</p>` +
-    `<table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="margin:28px auto;"><tr><td style="border:1px solid #7A1F2B;"><a href="${escapeAttr(d.buttonUrl || selenaAmazonUrl)}" class="font-body" style="display:inline-block;padding:13px 36px;font-size:11px;font-weight:400;letter-spacing:0.3em;text-transform:uppercase;color:#f0e8d8;text-decoration:none;background-color:transparent;">${escapeHtml(d.buttonText || 'Read on Kindle Unlimited')}</a></td></tr></table>` +
+    promotionButton +
     (d.bookCardHtml || '') +
     `<p class="font-body" style="margin:20px 0 0;font-size:12px;font-weight:300;color:#7a5a3a;line-height:2;">${d.tropeHtml}</p>` +
     '</td></tr><tr><td align="center" style="background-color:#0d0b0b;border-top:1px solid #1e1414;border-bottom:1px solid #1e1414;padding:18px 32px;"><table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center"><tr>' +
@@ -185,6 +202,45 @@ function buildSelenaNewsletterHtml(d) {
     '<td style="padding:0 10px;"><a href="https://www.threads.com/@selena.monroe.books" class="font-body" style="font-size:11px;letter-spacing:0.15em;text-transform:uppercase;color:#9a7a5a;text-decoration:none;">Threads</a></td>' +
     `<td style="padding:0 10px;"><a href="${selenaAmazonUrl}" class="font-body" style="font-size:11px;letter-spacing:0.15em;text-transform:uppercase;color:#9a7a5a;text-decoration:none;">Amazon</a></td>` +
     '</tr></table></td></tr><tr><td align="center" style="background-color:#0d0b0b;padding:24px 32px 28px;"><p class="font-display" style="margin:0 0 14px;font-size:18px;font-weight:300;letter-spacing:0.2em;color:#5a3a3a;">Selena Monroe</p><p class="font-body" style="margin:0 0 10px;font-size:10px;letter-spacing:0.1em;color:#3a2a2a;line-height:1.8;"><a href="{{UnsubscribeURL}}" style="color:#5a3a3a;text-decoration:underline;text-decoration-color:#3a2a2a;">Unsubscribe</a> &nbsp;&middot;&nbsp; <a href="{{RewardsURL}}" style="color:#5a3a3a;text-decoration:underline;text-decoration-color:#3a2a2a;">Powered by EmailOctopus</a> &nbsp;&middot;&nbsp; <a href="" style="color:#5a3a3a;text-decoration:underline;text-decoration-color:#3a2a2a;">View in browser</a></p><p class="font-body" style="margin:0 0 10px;font-size:10px;color:#3a2a2a;letter-spacing:0.05em;line-height:1.7;">{{SenderInfo}}</p><p class="font-body" style="margin:0 0 12px;font-size:10px;color:#3a2a2a;line-height:1.6;">&copy; 2026 Selena Monroe &nbsp;&middot;&nbsp; All rights reserved</p></td></tr></table></td></tr></table></body></html>';
+}
+
+export function stripNewsletterImages(html) {
+  return String(html || '')
+    .replace(/<picture\b[^>]*>[\s\S]*?<\/picture>/gi, '')
+    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, '')
+    .replace(/<img\b[^>]*\/?>/gi, '')
+    .replace(/<(?:image|v:image|v:fill)\b[^>]*\/?>/gi, '')
+    .replace(/\s(?:background|poster)\s*=\s*(["'])[\s\S]*?\1/gi, '')
+    .replace(/background-image\s*:\s*url\([^)]*\)\s*;?/gi, '')
+    .replace(/background\s*:\s*url\([^)]*\)[^;"]*;?/gi, '');
+}
+
+export function resolveNewsletterFeaturedBook({ books = [], featuredBook = null, promotionMode = 'auto', referenceDate = new Date() }) {
+  if (promotionMode === 'none') return null;
+  if (promotionMode === 'selected') {
+    return featuredBook && books.some((book) => String(book.id) === String(featuredBook.id)) ? featuredBook : null;
+  }
+
+  const today = localDateIso(referenceDate);
+  const upcoming = books
+    .filter((book) => !['Published', 'Live'].includes(book.status) && book.planned_release && book.planned_release >= today)
+    .sort((a, b) => String(a.planned_release).localeCompare(String(b.planned_release)));
+  if (upcoming.length) return upcoming[0];
+
+  const preorders = books
+    .filter((book) => book.status === 'Pre-order Live')
+    .sort((a, b) => String(a.planned_release || '9999-12-31').localeCompare(String(b.planned_release || '9999-12-31')));
+  if (preorders.length) return preorders[0];
+
+  return books
+    .filter((book) => ['Published', 'Live'].includes(book.status))
+    .sort((a, b) => String(b.actual_release || b.planned_release || '').localeCompare(String(a.actual_release || a.planned_release || '')))[0] || null;
+}
+
+function localDateIso(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }
 
 function escapeAttr(value) {

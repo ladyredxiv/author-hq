@@ -190,6 +190,8 @@ export const newsletterProjects = sqliteTable('newsletter_projects', {
   title: text('title').notNull(),
   topic: text('topic'),
   status: text('status').notNull().default('Active'),
+  featuredBookId: integer('featured_book_id').references(() => books.id),
+  promotionMode: text('promotion_mode').notNull().default('auto'),
   draftSubject: text('draft_subject'),
   draftPreview: text('draft_preview'),
   draftText: text('draft_text'),

@@ -303,6 +303,8 @@ export function initializeDatabase() {
       title TEXT NOT NULL,
       topic TEXT,
       status TEXT NOT NULL DEFAULT 'Active',
+      featured_book_id INTEGER REFERENCES books(id),
+      promotion_mode TEXT NOT NULL DEFAULT 'auto',
       draft_subject TEXT,
       draft_preview TEXT,
       draft_text TEXT,
@@ -602,6 +604,8 @@ function migrateColumns() {
   ensure('brain_documents', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
   ensure('brain_documents', 'archived_at', 'archived_at TEXT');
   ensure('brain_documents', 'archive_reason', 'archive_reason TEXT');
+  ensure('newsletter_projects', 'featured_book_id', 'featured_book_id INTEGER REFERENCES books(id)');
+  ensure('newsletter_projects', 'promotion_mode', "promotion_mode TEXT NOT NULL DEFAULT 'auto'");
   // KDP's order-status sheets repeat paid sales already represented by Combined Sales.
   // Older imports stored those status rows as sales, so remove only those imported duplicates.
   sqlite.exec(`

@@ -11,7 +11,7 @@ import { handleLogin, handleLogout, loginPage, requireAuth } from './auth.js';
 import { escapeHtml, formatPercent, layout, money, options } from './ui.js';
 import { adMetrics, billingMonthlyEquivalent, parseJson, parseMoney, todayIso } from './utils.js';
 import { parseLogText } from './services/chatParser.js';
-import { chatNewsletterProject, draftNewsletter } from './services/newsletterService.js';
+import { chatNewsletterProject, draftNewsletter, stripNewsletterImages } from './services/newsletterService.js';
 import { generateWithLlm } from './services/llmClient.js';
 import { draftAdCopy } from './services/adCopyService.js';
 import { generateKdpPacket, packetToFlatText } from './services/kdpListingService.js';
@@ -1485,6 +1485,11 @@ app.get('/newsletter/projects/:id', (req, res) => {
     res.status(404).send(layout('Newsletter Workspace Not Found', '<section class="card"><h2>Workspace not found</h2><p><a class="button secondary" href="/newsletter">Back to Newsletter</a></p></section>', { active: 'newsletter' }));
     return;
   }
+  const cleanHtml = stripNewsletterImages(project.draft_html || '');
+  if (cleanHtml !== (project.draft_html || '')) {
+    sqlite.prepare('UPDATE newsletter_projects SET draft_html = ? WHERE id = ?').run(cleanHtml, project.id);
+    project.draft_html = cleanHtml;
+  }
   const messages = newsletterMessages(project.id);
   res.send(layout(project.title, newsletterWorkspaceView(project, messages), { active: 'newsletter' }));
 });
@@ -1519,6 +1524,18 @@ app.post('/newsletter/projects/:id/messages', async (req, res) => {
 app.post('/newsletter/projects/:id/draft', asyncRoute(async (req, res) => {
   const project = newsletterProjectById(req.params.id);
   if (!project) throw new Error('Newsletter workspace not found.');
+  const contextBooks = allBooks().filter((book) => String(book.pen_name_id || '') === String(project.pen_name_id));
+  const featuredBookChoice = String(req.body.featuredBookChoice || project.promotion_mode || 'auto');
+  const promotionMode = featuredBookChoice === 'none' || featuredBookChoice === 'auto' ? featuredBookChoice : 'selected';
+  const featuredBook = promotionMode === 'selected'
+    ? contextBooks.find((book) => String(book.id) === featuredBookChoice) || null
+    : null;
+  if (promotionMode === 'selected' && !featuredBook) throw new Error('That featured book is not available for this pen name.');
+  sqlite.prepare(`
+    UPDATE newsletter_projects
+    SET promotion_mode = ?, featured_book_id = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(promotionMode, featuredBook?.id || null, project.id);
   const transcript = newsletterMessages(project.id)
     .slice(-40)
     .map((message) => `${message.role === 'user' ? 'Author' : 'Claude'}: ${message.content}`)
@@ -1527,7 +1544,9 @@ app.post('/newsletter/projects/:id/draft', asyncRoute(async (req, res) => {
     penName: project,
     topic: project.topic || project.title,
     notes: `Use this planning conversation as the editorial brief. Honor the author's decisions and do not invent facts.\n\n${transcript || 'No planning conversation yet.'}`,
-    books: allBooks()
+    books: contextBooks,
+    featuredBook,
+    promotionMode
   });
   sqlite.prepare(`
     UPDATE newsletter_projects SET
@@ -1542,7 +1561,7 @@ app.post('/newsletter/projects/:id/draft/save', (req, res) => {
   sqlite.prepare(`
     UPDATE newsletter_projects SET draft_subject=@subject, draft_preview=@preview,
       draft_text=@text, draft_html=@html, updated_at=CURRENT_TIMESTAMP WHERE id=@id
-  `).run({ id: req.params.id, subject: req.body.subject || '', preview: req.body.preview || '', text: req.body.text || '', html: req.body.html || '' });
+  `).run({ id: req.params.id, subject: req.body.subject || '', preview: req.body.preview || '', text: req.body.text || '', html: stripNewsletterImages(req.body.html || '') });
   res.redirect(`/newsletter/projects/${req.params.id}#newsletter-draft`);
 });
 
@@ -5237,8 +5256,17 @@ function newsletterWorkspaceView(project, messages) {
     <aside class="newsletter-side">
       <section class="card side-card">
         <h2>Shape the Draft</h2>
-        <p class="muted">When the angle feels right, Claude will turn this conversation into the finished newsletter.</p>
-        <form method="post" action="/newsletter/projects/${escapeHtml(project.id)}/draft"><button data-shape-newsletter>${project.draft_text || project.draft_html ? 'Regenerate From Conversation' : 'Shape Newsletter Draft'}</button></form>
+        <p class="muted">When the angle feels right, choose what this issue should promote and Claude will shape the finished newsletter.</p>
+        <form class="stack" method="post" action="/newsletter/projects/${escapeHtml(project.id)}/draft">
+          <div class="field">
+            <label for="newsletter-featured-book-${escapeHtml(project.id)}">Featured Book</label>
+            <select id="newsletter-featured-book-${escapeHtml(project.id)}" name="featuredBookChoice">
+              ${newsletterFeaturedBookOptions(project, contextBooks)}
+            </select>
+            <span class="tiny">Choose a specific upcoming or backlist title, let Author HQ pick the nearest release, or leave promotion out.</span>
+          </div>
+          <button data-shape-newsletter>${project.draft_text || project.draft_html ? 'Regenerate From Conversation' : 'Shape Newsletter Draft'}</button>
+        </form>
         ${project.draft_provider ? `<p class="tiny">Last shaped with ${escapeHtml(project.draft_provider)}.</p>` : ''}
       </section>
       <section class="card side-card"><h2>Project Context</h2>
@@ -5252,6 +5280,28 @@ function newsletterWorkspaceView(project, messages) {
   </div>
   ${project.draft_text || project.draft_html ? newsletterProjectDraft(project) : ''}
   ${newsletterWorkspaceScript()}`;
+}
+
+function newsletterFeaturedBookOptions(project, books) {
+  const selected = project.promotion_mode === 'none'
+    ? 'none'
+    : project.promotion_mode === 'selected' && project.featured_book_id
+      ? String(project.featured_book_id)
+      : 'auto';
+  const option = (value, label) => `<option value="${escapeHtml(value)}"${String(value) === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  const upcoming = books
+    .filter((book) => !['Published', 'Live'].includes(book.status))
+    .sort((a, b) => String(a.planned_release || '9999-12-31').localeCompare(String(b.planned_release || '9999-12-31')) || String(a.title).localeCompare(String(b.title)));
+  const backlist = books
+    .filter((book) => ['Published', 'Live'].includes(book.status))
+    .sort((a, b) => String(b.actual_release || b.planned_release || '').localeCompare(String(a.actual_release || a.planned_release || '')) || String(a.title).localeCompare(String(b.title)));
+  const label = (book) => `${book.title} - ${book.status || 'No status'}${book.planned_release || book.actual_release ? ` (${book.planned_release || book.actual_release})` : ''}`;
+  return [
+    option('auto', 'Auto - nearest upcoming title'),
+    option('none', 'No book promotion'),
+    upcoming.length ? `<optgroup label="Upcoming and In Progress">${upcoming.map((book) => option(book.id, label(book))).join('')}</optgroup>` : '',
+    backlist.length ? `<optgroup label="Published Backlist">${backlist.map((book) => option(book.id, label(book))).join('')}</optgroup>` : ''
+  ].join('');
 }
 
 function newsletterMessageBubble(message) {
