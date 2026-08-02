@@ -11,7 +11,7 @@
     "electron:dev": "electron .",
     "start": "node src/server.js",
     "check": "node src/scripts/checkCode.js",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
     "smoke:db": "set ELECTRON_RUN_AS_NODE=1&& electron src/scripts/smokeDatabase.js",
     "smoke:app": "set ELECTRON_RUN_AS_NODE=1&& electron src/scripts/smokeApp.js",
     "export:books": "node src/scripts/exportPublicBooks.js",

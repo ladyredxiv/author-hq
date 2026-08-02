@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyKdpPenTemplate, kdpPenTemplateFor } from '../src/services/kdpPenTemplateService.js';
-import { generateKdpPacket } from '../src/services/kdpListingService.js';
+import { generateKdpPacket, keywordConstraintIssues } from '../src/services/kdpListingService.js';
 
 const basePacket = {
   format: 'ebook',
@@ -102,6 +102,24 @@ test('does not apply Ana rules to another pen name', () => {
   }), null);
 });
 
+test('reports duplicate and category-overlapping KDP keyword words', () => {
+  const issues = keywordConstraintIssues({
+    categories_suggested: [{ path: 'Romance > Workplace Romance' }],
+    keywords: [
+      'office romance boss',
+      'boss assistant office',
+      'corporate power dynamic',
+      'morally gray executive',
+      'forbidden attraction novella',
+      'possessive hero short read',
+      'high heat contract'
+    ]
+  });
+  assert.ok(issues.some((issue) => issue.includes('category word "romance"')));
+  assert.ok(issues.some((issue) => issue.includes('repeats word "boss"')));
+  assert.ok(issues.some((issue) => issue.includes('repeats word "office"')));
+});
+
 test('Ana template constrains a Claude-generated packet instead of bypassing the LLM', async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
@@ -142,13 +160,41 @@ test('Ana template constrains a Claude-generated packet instead of bypassing the
     marketing_validation: { status: 'Claude reviewed' },
     warnings: ['Review before publishing.']
   };
+  const repairedKeywords = [
+    'obsessive CEO assistant',
+    'forbidden office power dynamic',
+    'morally gray billionaire',
+    'possessive executive short read',
+    'corporate enemies high heat',
+    'risky contract attraction',
+    'steamy boss proximity'
+  ];
+  const repairedAlternate = [
+    'commanding executive seduction',
+    'taboo office temptation',
+    'wealthy protector obsession',
+    'career rivalry sparks',
+    'contractual desire novella',
+    'power imbalance passion',
+    'corporate secrets heat'
+  ];
   globalThis.fetch = async () => {
     calls += 1;
+    const content = calls === 3
+      ? JSON.stringify({
+        keywords: repairedKeywords,
+        keyword_sets: [
+          { label: 'Primary', keywords: repairedKeywords, rationale: 'Distinct book-specific intents' },
+          { label: 'Alternate', keywords: repairedAlternate, rationale: 'Distinct alternate vocabulary' }
+        ],
+        keyword_notes: 'No words repeat across slots or overlap the selected categories.'
+      })
+      : JSON.stringify(generatedPacket);
     return {
       ok: true,
       json: async () => ({
         model: 'anthropic/claude-sonnet-4.6',
-        choices: [{ message: { content: JSON.stringify(generatedPacket) } }]
+        choices: [{ message: { content } }]
       })
     };
   };
@@ -168,12 +214,13 @@ test('Ana template constrains a Claude-generated packet instead of bypassing the
       }
     });
 
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
     assert.equal(result.provider, 'openrouter');
     assert.equal(result.packet.title, 'A Dangerous Arrangement');
     assert.equal(result.packet.price_usd, 2.99);
-    assert.equal(result.packet.keywords[0], 'obsessive CEO office romance');
+    assert.equal(result.packet.keywords[0], 'obsessive CEO assistant');
     assert.equal(result.packet.keywords.length, 7);
+    assert.deepEqual(keywordConstraintIssues(result.packet), []);
     assert.equal(result.packet.categories_suggested.length, 3);
     assert.equal(result.packet.categories_suggested[0].path, 'Romance > Workplace Romance');
     assert.equal(result.packet.categories_suggested[1].path, 'Business & Money > Management & Leadership');

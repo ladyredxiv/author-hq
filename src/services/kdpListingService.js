@@ -34,9 +34,16 @@ export async function generateKdpPacket({ penName, genreConfig, book, listing, c
     const locked = penTemplate
       ? applyKdpPenTemplate({ packet: generated, penName, listing, manuscriptBrief, preserveGeneratedCopy: true })
       : generated;
+    const keywordOptimized = await repairKeywordConstraints({
+      packet: sanitizePacket(locked),
+      penName,
+      book,
+      listing,
+      manuscriptBrief
+    });
     return {
       provider: result.provider,
-      packet: sanitizePacket(locked)
+      packet: sanitizePacket(keywordOptimized)
     };
   } catch (error) {
     return {
@@ -168,8 +175,11 @@ Rules:
 - Create 3 description_options: emotional, high-concept, and trope-forward. Each object has approach, description_html, and rationale.
 - description_html: choose or combine the strongest option into a 180-350 word final description. Use KDP-safe limited HTML only (b, i, br), hook-first structure, specific emotional stakes, no spoilers beyond the supplied spoiler boundary, and a tension/reader-promise ending.
 - Avoid generic filler such as "a journey of self-discovery," "nothing is as it seems," and "will change everything" unless the manuscript evidence makes the wording specific.
-- Create 2 keyword_sets: primary and alternate. Each object has label, keywords, and rationale.
-- keywords: exactly 7 natural search phrases, each under 50 characters. Cover distinct reader intents rather than repeating the same roots. Do not repeat title, series, pen name, category names, competitor names, or unsupported tropes. No bestseller/award claims.
+- Create 2 keyword_sets: primary and alternate. Each object has label, keywords, and rationale. The primary set must exactly match keywords. Each set must independently follow every keyword rule below.
+- keywords: exactly 7 natural search phrases, each at most 50 characters. Coordinate all seven slots as one set and use the available character space for useful, book-specific search intent without padding.
+- No normalized word may appear in more than one phrase within a set. Do not repeat the same word across slots.
+- Do not use words already present in any selected category label. Coordinate categories and keywords so each contributes different discovery language.
+- Do not repeat title, series, pen name, competitor names, or unsupported tropes. No bestseller/award claims.
 - categories_suggested: up to 3 objects with path, rating, rationale.
 - categories_suggested must NOT include YA, Young Adult, Teen, Middle Grade, Juvenile, or Children's categories. Use adult-facing shelves only.
 - category_strategy: object with summary and no_ads_plan array. Treat fortress categories as honest reader-fit shelves, not as a failure. Do not recommend misleading categories just because they are easier. Explain how keywords, description positioning, cover promise, KU/series behavior, newsletter/website/social traffic should support discoverability when categories are fortress.
@@ -206,7 +216,10 @@ Validation requirements:
 - Select the strongest final description_html while preserving all 3 description_options.
 - Final keywords must contain exactly 7 distinct phrases under 50 characters each.
 - Keywords should span subgenre, emotional promise, relationship/trope, setting, tone, and distinctive hook where accurate.
-- Remove repeated roots when they waste a slot. Do not use title, series, pen name, named competitors, category labels, or unsupported claims.
+- Treat all seven slots as one coordinated vocabulary. No normalized word may appear in more than one keyword phrase.
+- No keyword word may appear in any selected category label. Categories and keywords must carry different useful terms.
+- Each keyword phrase must be at most 50 characters. Do not use title, series, pen name, named competitors, or unsupported claims.
+- Apply the same no-duplicate and no-category-word rules independently to each keyword_set. The primary keyword_set must match the final keywords exactly.
 - Maintain adult-only category restrictions.
 - marketing_validation must contain accuracy, spoiler_safety, positioning_strength, keyword_coverage, changes_made array, and warnings array.
 - Return the complete packet JSON, not commentary.
@@ -222,6 +235,92 @@ Candidate packet: ${JSON.stringify(candidate)}`;
   } catch (error) {
     return { ...candidate, warnings: mergeWarnings(candidate.warnings, [`Marketing validation pass failed: ${error.message}`]) };
   }
+}
+
+async function repairKeywordConstraints({ packet, penName, book, listing, manuscriptBrief }) {
+  const issues = keywordConstraintIssues(packet);
+  if (!issues.length) return packet;
+  const system = `You are a precision Amazon KDP keyword editor. Return valid JSON only. Repair keyword metadata without changing the book facts or categories.`;
+  const prompt = `Repair only the keyword metadata for this KDP packet.
+
+Return exactly:
+{"keywords":["7 phrases"],"keyword_sets":[{"label":"Primary","keywords":["same 7 phrases"],"rationale":"..."},{"label":"Alternate","keywords":["7 alternate phrases"],"rationale":"..."}],"keyword_notes":"..."}
+
+Hard rules for each seven-phrase set:
+- Exactly 7 natural, book-specific search phrases.
+- Every phrase is 50 characters or fewer.
+- No normalized word appears more than once anywhere within the set, including repeated words inside one phrase.
+- No word used in the category labels may appear in a keyword phrase.
+- Do not use words from the title, series, or pen name.
+- Do not use category names, competitor names, vague filler, unsupported tropes, bestseller claims, or keyword stuffing.
+- The Primary set must exactly match keywords. The Alternate set must follow the same constraints independently.
+- Use distinct search intents across slots: relationship dynamic, character archetype, setting, emotional promise, tone, plot hook, and reading experience where supported.
+
+Current constraint problems:
+${issues.map((issue) => `- ${issue}`).join('\n')}
+
+Categories whose words are unavailable:
+${(packet.categories_suggested || []).map((category) => `- ${category.path || category}`).join('\n')}
+
+Pen name: ${penName?.display_name || 'Unassigned'}
+Book: ${JSON.stringify(book || {})}
+Listing inputs: ${JSON.stringify(listing || {})}
+Manuscript brief: ${JSON.stringify(manuscriptBrief || {})}
+Current keywords: ${JSON.stringify(packet.keywords || [])}
+Current keyword sets: ${JSON.stringify(packet.keyword_sets || [])}`;
+  try {
+    const result = await generateWithLlm({ system, prompt, maxTokens: 2200, timeoutMs: 90000 });
+    if (!isLlmProvider(result.provider)) {
+      return { ...packet, warnings: mergeWarnings(packet.warnings, [`Keyword constraints still need review: ${issues.join('; ')}`]) };
+    }
+    const parsed = parsePacketJson(result.text) || {};
+    const repaired = sanitizePacket({
+      ...packet,
+      keywords: parsed.keywords || packet.keywords,
+      keyword_sets: parsed.keyword_sets || packet.keyword_sets,
+      keyword_notes: parsed.keyword_notes || packet.keyword_notes
+    });
+    const remaining = keywordConstraintIssues(repaired);
+    return remaining.length
+      ? { ...repaired, warnings: mergeWarnings(repaired.warnings, [`Claude's keyword repair still needs review: ${remaining.join('; ')}`]) }
+      : repaired;
+  } catch (error) {
+    return { ...packet, warnings: mergeWarnings(packet.warnings, [`Keyword repair failed: ${error.message}`]) };
+  }
+}
+
+export function keywordConstraintIssues(packet) {
+  const categoryWords = new Set(
+    (packet.categories_suggested || [])
+      .flatMap((category) => keywordWords(category?.path || category))
+      .filter((word) => !categoryBoilerplateWords.has(word))
+  );
+  const sets = [{ label: 'Final keywords', keywords: packet.keywords || [] }];
+  (packet.keyword_sets || []).forEach((set, index) => {
+    sets.push({ label: set.label || `Keyword set ${index + 1}`, keywords: set.keywords || [] });
+  });
+  const issues = [];
+  for (const set of sets) {
+    if (set.keywords.length !== 7) issues.push(`${set.label} has ${set.keywords.length} slots instead of 7`);
+    const usedWords = new Set();
+    set.keywords.forEach((phrase, index) => {
+      const value = String(phrase || '').trim();
+      if (!value) issues.push(`${set.label} slot ${index + 1} is empty`);
+      if (value.length > 50) issues.push(`${set.label} slot ${index + 1} is ${value.length} characters`);
+      for (const word of keywordWords(value)) {
+        if (categoryWords.has(word)) issues.push(`${set.label} slot ${index + 1} repeats category word "${word}"`);
+        if (usedWords.has(word)) issues.push(`${set.label} repeats word "${word}"`);
+        usedWords.add(word);
+      }
+    });
+  }
+  return [...new Set(issues)];
+}
+
+const categoryBoilerplateWords = new Set(['kindle', 'store', 'ebook', 'ebooks', 'book', 'books', 'literature', 'fiction', 'and', 'the', 'of', 'for', 'in', 'on', 'with', 'to', 'a', 'an']);
+
+function keywordWords(value) {
+  return String(value || '').toLowerCase().match(/[a-z0-9]+/g) || [];
 }
 
 function isLlmProvider(provider) {
