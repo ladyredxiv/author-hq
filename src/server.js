@@ -5601,7 +5601,11 @@ function kdpListingForm({ selectedBookId = '', analyses = [] } = {}) {
       <div class="field"><label>Price USD</label><input name="priceUsd" id="kdp-price" value="${escapeHtml(firstConfig?.default_price_usd || '4.99')}"></div>
       <div class="field"><label>KDP Select / KU</label><select name="kuEnrolled" id="kdp-ku"><option value="1" ${firstConfig?.default_ku_enrolled ? 'selected' : ''}>Yes</option><option value="0" ${firstConfig?.default_ku_enrolled ? '' : 'selected'}>No</option></select></div>
     </div>
-    <textarea name="blurbDraft" placeholder="Raw back-cover-style pitch or messy notes. The generator turns this into KDP-safe description HTML."></textarea>
+    <div class="field">
+      <label>Synopsis, Notes, or Existing Blurb</label>
+      <textarea name="blurbDraft" rows="10" placeholder="Paste a full synopsis, rough notes, or an existing blurb. Claude will transform long material into spoiler-safe KDP sales copy rather than reproducing it."></textarea>
+      <span class="tiny">Detailed synopses may include the ending for context. The generator is instructed to keep resolution spoilers out of the finished blurb.</span>
+    </div>
     <textarea name="compTitles" placeholder="Comp titles/authors or tone references, optional"></textarea>
     <textarea name="targetCategories" placeholder="Manual category override, optional. One category path per line."></textarea>
     <div class="row">

@@ -25,15 +25,30 @@ export async function generateKdpPacket({ penName, genreConfig, book, listing, c
   const system = `You are a senior fiction metadata copywriter specializing in ethical, conversion-focused Amazon KDP listings. Write specific copy that communicates reader promise, emotional stakes, subgenre, and differentiating hooks. Return only valid JSON matching the requested schema. Never invent plot facts, tropes, relationship outcomes, awards, reviews, bestseller claims, or named competitor comparisons.`;
 
   try {
-    const result = await generateWithLlm({ system, prompt, maxTokens: 3600, timeoutMs: 90000 });
+    const result = await generateWithLlm({ system, prompt, maxTokens: 6200, timeoutMs: 120000 });
     if (!isLlmProvider(result.provider)) return { provider: result.provider, packet: baseline, prompt: result.text };
     const parsed = parsePacketJson(result.text);
-    const candidate = sanitizePacket({ ...baseline, ...parsed, warnings: mergeWarnings(baseline.warnings, parsed?.warnings) });
+    const candidate = sanitizePacket({
+      ...baseline,
+      ...parsed,
+      warnings: mergeWarnings(
+        baseline.warnings,
+        parsed?.warnings,
+        parsed ? [] : ['Claude\'s first packet response was incomplete; the quality-control pass rebuilt it.']
+      )
+    });
     const validated = await validateAndOptimizePacket({ candidate, manuscriptBrief, penName, listing });
     const generated = sanitizePacket(validated || candidate);
+    const descriptionOptimized = await repairDescriptionIfNeeded({
+      packet: generated,
+      penName,
+      book,
+      listing,
+      manuscriptBrief
+    });
     const locked = penTemplate
-      ? applyKdpPenTemplate({ packet: generated, penName, listing, manuscriptBrief, preserveGeneratedCopy: true })
-      : generated;
+      ? applyKdpPenTemplate({ packet: descriptionOptimized, penName, listing, manuscriptBrief, preserveGeneratedCopy: true })
+      : descriptionOptimized;
     const keywordOptimized = await repairKeywordConstraints({
       packet: sanitizePacket(locked),
       penName,
@@ -124,10 +139,14 @@ function fallbackPacket({ penName, config, book, listing, categoryRows, warnings
   const briefTropes = factList(manuscriptBrief?.tropes);
   const briefConcepts = listValue(manuscriptBrief?.searchable_concepts);
   const tropes = briefTropes.length ? briefTropes : config.coreTropes.length ? config.coreTropes : [parseJson(penName?.brand_details, {}).genre || 'fiction'];
+  const sourceDescription = String(listing.blurbDraft || '').trim();
+  const fallbackCopy = descriptionSourceKind(sourceDescription) === 'detailed synopsis'
+    ? 'A detailed synopsis was supplied as source material. Claude must transform it into spoiler-safe KDP sales copy before publishing.'
+    : sourceDescription || `A ${parseJson(penName?.brand_details, {}).genre || 'genre fiction'} story from ${penName?.display_name || 'this pen name'}.`;
   const description = [
     `<b>${escapeHtml(title)}</b>`,
     '',
-    escapeHtml(listing.blurbDraft || `A ${parseJson(penName?.brand_details, {}).genre || 'genre fiction'} story from ${penName?.display_name || 'this pen name'}.`),
+    escapeHtml(fallbackCopy),
     '',
     '<i>Review this draft description before publishing.</i>'
   ].join('<br><br>');
@@ -163,6 +182,9 @@ function fallbackPacket({ penName, config, book, listing, categoryRows, warnings
 }
 
 function buildPrompt({ penName, config, book, listing, categoryRows, fallback, manuscriptBrief, penTemplate = null }) {
+  const descriptionSource = String(listing.blurbDraft || '').trim();
+  const sourceKind = descriptionSourceKind(descriptionSource);
+  const listingFacts = { ...listing, blurbDraft: descriptionSource ? `[Provided separately as ${sourceKind}]` : '' };
   const templateRules = penTemplate
     ? `A pen-name template is active. Treat these operational values in the fallback packet as immutable: format, title, price_usd, royalty_note, ku_enrolled, adult_content, ai_disclosure, reading_age, author_bio, and the adult-content footer at the end of description_html. Generate the creative metadata exactly as you would for any other pen name: seven highly specific, book-dependent keyword phrases with no fixed evergreen slots, three book-dependent categories, all three description options, category_strategy, and marketing_validation. The first category must be in the Romance family. Do not deliberately select any category containing "Erotica." Do not reuse generic template keywords when the supplied book details support more precise search language.`
     : 'No pen-name-specific locked template is active.';
@@ -174,6 +196,9 @@ format, title, subtitle, description_html, description_options, keywords, keywor
 Rules:
 - Create 3 description_options: emotional, high-concept, and trope-forward. Each object has approach, description_html, and rationale.
 - description_html: choose or combine the strongest option into a 180-350 word final description. Use KDP-safe limited HTML only (b, i, br), hook-first structure, specific emotional stakes, no spoilers beyond the supplied spoiler boundary, and a tension/reader-promise ending.
+- The description source may be a detailed synopsis, rough notes, or an existing blurb. Treat it as factual source material, not paste-ready copy. Never reproduce a long synopsis wholesale.
+- When the source includes the ending or resolution, use it only to understand the arc. Exclude resolution spoilers, protected identities, final choices, and sequel setup from the sales copy unless the author explicitly identifies them as reader-facing hooks.
+- Compress detailed synopsis material into a genuine back-cover pitch: protagonist and desire, destabilizing relationship or conflict, escalating stakes, distinctive promise, and an open tension at the end.
 - Avoid generic filler such as "a journey of self-discovery," "nothing is as it seems," and "will change everything" unless the manuscript evidence makes the wording specific.
 - Create 2 keyword_sets: primary and alternate. Each object has label, keywords, and rationale. The primary set must exactly match keywords. Each set must independently follow every keyword rule below.
 - keywords: exactly 7 natural search phrases, each at most 50 characters. Coordinate all seven slots as one set and use the available character space for useful, book-specific search intent without padding.
@@ -198,7 +223,10 @@ Verified category candidates: ${JSON.stringify(config.verifiedCategories)}
 Workbook category matches: ${JSON.stringify(categoryRows.slice(0, 12))}
 
 Book record: ${JSON.stringify(book || {})}
-Listing inputs: ${JSON.stringify(listing)}
+Listing inputs: ${JSON.stringify(listingFacts)}
+Description source type: ${sourceKind}
+DESCRIPTION SOURCE MATERIAL:
+${descriptionSource || 'No manual description source supplied.'}
 Reviewed manuscript brief (factual boundary; author-reviewed values override other guesses):
 ${JSON.stringify(manuscriptBrief || { available: false })}
 
@@ -229,12 +257,97 @@ Author inputs: ${JSON.stringify(listing)}
 Manuscript brief: ${JSON.stringify(manuscriptBrief || { available: false })}
 Candidate packet: ${JSON.stringify(candidate)}`;
   try {
-    const result = await generateWithLlm({ system, prompt, maxTokens: 4000, timeoutMs: 90000 });
+    const result = await generateWithLlm({ system, prompt, maxTokens: 6200, timeoutMs: 120000 });
     if (!isLlmProvider(result.provider)) return candidate;
-    return parsePacketJson(result.text) || candidate;
+    const parsed = parsePacketJson(result.text);
+    return parsed || {
+      ...candidate,
+      warnings: mergeWarnings(candidate.warnings, ['Claude\'s packet quality-control response was incomplete; focused repair may be required.'])
+    };
   } catch (error) {
     return { ...candidate, warnings: mergeWarnings(candidate.warnings, [`Marketing validation pass failed: ${error.message}`]) };
   }
+}
+
+async function repairDescriptionIfNeeded({ packet, penName, book, listing, manuscriptBrief }) {
+  const source = String(listing?.blurbDraft || '').trim();
+  if (!descriptionNeedsRepair(packet, source)) return packet;
+  const system = `You are a senior fiction back-cover copywriter. Transform source material into accurate, spoiler-safe Amazon KDP sales copy. Return valid JSON only.`;
+  const prompt = `Create the description portion of a KDP packet from the supplied ${descriptionSourceKind(source)}.
+
+Return exactly:
+{"description_html":"final 180-350 word KDP description","description_options":[{"approach":"emotional","description_html":"...","rationale":"..."},{"approach":"high-concept","description_html":"...","rationale":"..."},{"approach":"trope-forward","description_html":"...","rationale":"..."}]}
+
+Requirements:
+- Transform and compress the source. Do not paste, lightly edit, or summarize it paragraph by paragraph.
+- Each option must be genuine sales copy with a hook, clear character/relationship promise, escalating stakes, and an open tension.
+- The final description_html must be 180-350 words and select or combine the strongest option.
+- Use only KDP-safe b, i, and br tags.
+- Preserve factual accuracy while withholding the ending, final solution, protected identities, resolution mechanics, and sequel setup.
+- Do not invent tropes, outcomes, quotations, reviews, awards, or competitor comparisons.
+
+Pen name: ${penName?.display_name || 'Unassigned'}
+Book record: ${JSON.stringify(book || {})}
+Listing facts: ${JSON.stringify({ ...listing, blurbDraft: '[supplied below]' })}
+Reviewed manuscript brief: ${JSON.stringify(manuscriptBrief || {})}
+
+SOURCE MATERIAL:
+${source || plainTextFromHtml(packet.description_html)}`;
+  try {
+    const result = await generateWithLlm({ system, prompt, maxTokens: 4200, timeoutMs: 120000 });
+    if (!isLlmProvider(result.provider)) {
+      return { ...packet, warnings: mergeWarnings(packet.warnings, ['Description still needs Claude transformation; no LLM provider was available for the focused repair.']) };
+    }
+    const parsed = parsePacketJson(result.text);
+    if (!parsed?.description_html || !Array.isArray(parsed.description_options) || parsed.description_options.length < 3) {
+      return { ...packet, warnings: mergeWarnings(packet.warnings, ['Claude returned an incomplete focused blurb revision. Regenerate this packet before using the description.']) };
+    }
+    return sanitizePacket({
+      ...packet,
+      description_html: parsed.description_html,
+      description_options: parsed.description_options,
+      warnings: mergeWarnings(packet.warnings, ['Long synopsis/notes were transformed into KDP sales copy; verify spoiler boundaries before publishing.'])
+    });
+  } catch (error) {
+    return { ...packet, warnings: mergeWarnings(packet.warnings, [`Focused blurb generation failed: ${error.message}`]) };
+  }
+}
+
+export function descriptionNeedsRepair(packet, source = '') {
+  const outputWords = wordCount(plainTextFromHtml(packet?.description_html));
+  const sourceIsDetailed = descriptionSourceKind(source) === 'detailed synopsis';
+  const missingOptions = !Array.isArray(packet?.description_options) || packet.description_options.length < 3;
+  return missingOptions || outputWords > 400 || (sourceIsDetailed && (outputWords > 375 || descriptionCopiesSource(packet?.description_html, source)));
+}
+
+export function descriptionSourceKind(value) {
+  const text = String(value || '').trim();
+  return wordCount(text) >= 220 || text.length >= 1400 ? 'detailed synopsis' : text ? 'rough notes or existing blurb' : 'no manual source';
+}
+
+function plainTextFromHtml(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, '&')
+    .replace(/&[^;]+;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function wordCount(value) {
+  return String(value || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
+function descriptionCopiesSource(description, source) {
+  const sourceWords = plainTextFromHtml(source).toLowerCase().split(/\s+/).filter(Boolean);
+  const output = plainTextFromHtml(description).toLowerCase();
+  if (sourceWords.length < 54 || !output) return false;
+  const windowSize = 18;
+  const starts = [0, Math.floor(sourceWords.length / 3), Math.floor((sourceWords.length * 2) / 3)];
+  return starts.some((start) => output.includes(sourceWords.slice(start, start + windowSize).join(' ')));
 }
 
 async function repairKeywordConstraints({ packet, penName, book, listing, manuscriptBrief }) {
@@ -378,10 +491,18 @@ function keywordFallback(starters, tropes) {
 }
 
 function parsePacketJson(text) {
+  const source = String(text || '').replace(/```json|```/gi, '').trim();
   try {
-    return JSON.parse(String(text || '').replace(/```json|```/g, '').trim());
+    return JSON.parse(source);
   } catch {
-    return null;
+    const firstBrace = source.indexOf('{');
+    const lastBrace = source.lastIndexOf('}');
+    if (firstBrace < 0 || lastBrace <= firstBrace) return null;
+    try {
+      return JSON.parse(source.slice(firstBrace, lastBrace + 1));
+    } catch {
+      return null;
+    }
   }
 }
 
